@@ -1,0 +1,81 @@
+name: Build and publish TipStream for Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - name: Pobierz kod
+        uses: actions/checkout@v4
+
+      - name: Sprawdź tag wydania
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            throw "Użyj taga w formacie vX.Y.Z, np. v0.2.0"
+          }
+
+      - name: Przygotuj Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Zainstaluj zależności, testy i PyInstaller
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller pytest
+
+      - name: Uruchom testy
+        run: python -m pytest -q
+
+      - name: Zbuduj aplikację desktopową
+        shell: pwsh
+        run: >-
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name TipStreamApp
+          --paths .
+          --add-data "web;web"
+          --add-data "docs;docs"
+          --collect-all TikTokLive
+          --collect-all TikTokLiveProto
+          --collect-all websockets_proxy
+          --collect-all EulerApiSdk
+          app/desktop.py
+
+      - name: Zbuduj mały launcher z updaterem
+        shell: pwsh
+        run: >-
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name TipStream
+          --paths .
+          app/launcher.py
+
+      - name: Przygotuj paczkę aktualizacji i SHA-256
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item dist/TipStream.exe release-assets/TipStream.exe
+          Compress-Archive -Path dist/TipStreamApp.exe -DestinationPath release-assets/TipStreamApp-win-x64.zip -CompressionLevel Optimal
+          $hash = (Get-FileHash release-assets/TipStreamApp-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  TipStreamApp-win-x64.zip" | Set-Content -Encoding ascii release-assets/checksums.txt
+          Get-ChildItem release-assets | Select-Object Name,Length
+
+      - name: Opublikuj wydanie GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release create $tag `
+            --repo $env:GITHUB_REPOSITORY `
+            --title "TipStream $tag" `
+            --generate-notes `
+            release-assets/TipStream.exe `
+            release-assets/TipStreamApp-win-x64.zip `
+            release-assets/checksums.txt

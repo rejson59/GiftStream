@@ -1,0 +1,14 @@
+from app.games import GAMES, get_game
+
+
+def test_minecraft_has_ready_preset_mapping():
+    game = get_game("minecraft-survival")
+    assert game is not None
+    assert game["status"] == "bridge"
+    assert any(rule["action"]["type"] == "spawn_zombie" for rule in game["rules"])
+
+
+def test_other_game_cards_are_ideas_not_claimed_integrations():
+    ideas = [g for g in GAMES if g["status"] == "idea"]
+    assert len(ideas) >= 5
+    assert all("rules" not in game for game in ideas)

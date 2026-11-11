@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.spec
+.env
+config.json
+events.jsonl
+gift_catalog.json
+presets/*.json
+!presets/.gitkeep
+.pytest_cache/
+.mypy_cache/
+.DS_Store
