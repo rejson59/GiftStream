@@ -5,14 +5,14 @@
 ## Co działa w MVP
 
 - Polski panel twórcy z aktywnością na żywo, statystykami i rankingiem wspierających.
-- Presety i edytor reguł: prezent / próg polubień / obserwacja / słowo w komentarzu → akcja gry.
+- Presety i edytor reguł: prezent / próg polubień / obserwacja / słowo w komentarzu → akcja gry; gdzie TikTok udostępnia grafikę giftu, pokazujemy oryginalny obraz z jego CDN zamiast emoji.
 - Cooldowny, obsługa serii prezentów i oznaczenia akcji priorytetowych.
 - Symulator zdarzeń oraz nieoficjalny konektor TikTokLive i adapter zewnętrznego WebSocket API.
 - Gra demo „Arena zombie”, pięć gotowych presetów (w tym Minecraft: przetrwanie, parkour, arena i nocna horda) oraz wyszukiwalny katalog dodatkowych koncepcji gier.
 - Alerty prezentów i obserwacji: polska synteza mowy z systemowego WebView, dźwiękowy sygnał i regulacja głośności — bez zewnętrznych usług.
 - Integracja Minecraft **Paper / Spigot / Bukkit przez ServerTap**. Obsługuje ograniczony zestaw komend z allow-listy; konfiguracja w panelu Integracje.
 - Katalog dodatkowych koncepcji gier (m.in. Lethal Company, Phasmophobia, Sons of the Forest, 7 Days to Die, GTA V offline, Raft, Valheim i Roblox); te karty nie oznaczają gotowych integracji.
-- Biblioteka do 100 popularnych giftów: katalog TikToka i oryginalne grafiki z jego CDN pobierane są automatycznie bez logowania i bez połączenia transmisji. GiftStream zapisuje metadane i adresy lokalnie, nie kopiuje ani nie hostuje grafik.
+- Biblioteka do 100 giftów z oryginalnymi grafikami z CDN TikToka, wyszukiwaniem i sortowaniem po popularności orientacyjnej albo cenie w monetach. Wartość monet płacą widzowie; diamenty są odrębną miarą nagród twórcy. Oferta i ceny mogą się różnić w aplikacji, regionie i kanale zakupu; ceny oznaczone „≈” są szacowane, jeśli katalog nie podaje bezpośrednio wartości monet. Obrazy pozostają na CDN TikToka, a GiftStream zapisuje wyłącznie adresy i metadane.
 - Lokalne pliki JSON; konto ani baza danych nie są wymagane do testów.
 
 ## Aplikacja Windows i automatyczne aktualizacje

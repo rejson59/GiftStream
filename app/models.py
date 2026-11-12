@@ -115,21 +115,21 @@ class AppConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 GIFT_CATALOG: list[dict[str, Any]] = [
-    # Wartości przykładowe, zależne od regionu i zmian katalogu TikToka.
-    # Prawdziwe ID, ceny i adresy grafik dopisuje konektor na podstawie LIVE.
-    {"name": "Rose", "label_pl": "Róża", "id": None, "diamonds": 1, "image_url": None, "source": "sample"},
-    {"name": "TikTok", "label_pl": "TikTok", "id": None, "diamonds": 5, "image_url": None, "source": "sample"},
-    {"name": "Finger Heart", "label_pl": "Serduszko z palców", "id": None, "diamonds": 5, "image_url": None, "source": "sample"},
-    {"name": "Doughnut", "label_pl": "Donut", "id": None, "diamonds": 30, "image_url": None, "source": "sample"},
-    {"name": "Ice Cream", "label_pl": "Lody", "id": None, "diamonds": 50, "image_url": None, "source": "sample"},
-    {"name": "Panda", "label_pl": "Panda", "id": None, "diamonds": 100, "image_url": None, "source": "sample"},
-    {"name": "Sunglasses", "label_pl": "Okulary", "id": None, "diamonds": 199, "image_url": None, "source": "sample"},
-    {"name": "Corgi", "label_pl": "Corgi", "id": None, "diamonds": 299, "image_url": None, "source": "sample"},
-    {"name": "Money Gun", "label_pl": "Pistolet na pieniądze", "id": None, "diamonds": 599, "image_url": None, "source": "sample"},
-    {"name": "Dragon", "label_pl": "Smok", "id": None, "diamonds": 999, "image_url": None, "source": "sample"},
-    {"name": "Castle", "label_pl": "Zamek", "id": None, "diamonds": 2888, "image_url": None, "source": "sample"},
-    {"name": "Lion", "label_pl": "Lew", "id": None, "diamonds": 29999, "image_url": None, "source": "sample"},
-    {"name": "TikTok Universe", "label_pl": "Wszechświat TikToka", "id": None, "diamonds": 34999, "image_url": None, "source": "sample"},
+    # Monety to cena orientacyjna dla widza; diamenty to odrębna wartość zdarzenia.
+    # Ceny mogą się różnić regionalnie; prawdziwe ID i grafiki uzupełnia katalog TikToka.
+    {"name": "Rose", "label_pl": "Róża", "id": None, "diamonds": 1, "coins": 1, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "TikTok", "label_pl": "TikTok", "id": None, "diamonds": 5, "coins": 5, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Finger Heart", "label_pl": "Serduszko z palców", "id": None, "diamonds": 5, "coins": 5, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Doughnut", "label_pl": "Donut", "id": None, "diamonds": 30, "coins": 30, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Ice Cream", "label_pl": "Lody", "id": None, "diamonds": 50, "coins": 50, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Panda", "label_pl": "Panda", "id": None, "diamonds": 100, "coins": 100, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Sunglasses", "label_pl": "Okulary", "id": None, "diamonds": 199, "coins": 199, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Corgi", "label_pl": "Corgi", "id": None, "diamonds": 299, "coins": 299, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Money Gun", "label_pl": "Pistolet na pieniądze", "id": None, "diamonds": 599, "coins": 599, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Dragon", "label_pl": "Smok", "id": None, "diamonds": 999, "coins": 999, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Castle", "label_pl": "Zamek", "id": None, "diamonds": 2888, "coins": 2888, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Lion", "label_pl": "Lew", "id": None, "diamonds": 29999, "coins": 29999, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "TikTok Universe", "label_pl": "Wszechświat TikToka", "id": None, "diamonds": 34999, "coins": 34999, "coins_estimated": True, "image_url": None, "source": "sample"},
 ]
 
 # Akcje gier — dokumentacja w docs/BRIDGE.md

@@ -14,6 +14,29 @@ def test_catalog_merges_real_gift_image_and_searches_by_localized_name(tmp_path,
     assert gifts.list_gifts("not-a-gift") == []
 
 
+def test_catalog_prices_are_exposed_as_coins_and_sort_options_work(tmp_path, monkeypatch):
+    monkeypatch.setattr(gifts, "CACHE_PATH", tmp_path / "gifts.json")
+    monkeypatch.setattr(gifts, "_seen", {})
+    popular = gifts.list_gifts(sort="popular")
+    cheap = gifts.list_gifts(sort="price_asc")
+    expensive = gifts.list_gifts(sort="price_desc")
+    assert popular[0]["name"] == "Rose"
+    assert cheap[0]["coins"] == 1
+    assert expensive[0]["coins"] >= cheap[0]["coins"]
+    assert all("coins" in gift for gift in popular)
+
+
+def test_catalog_prefers_explicit_coin_cost_when_available(tmp_path, monkeypatch):
+    monkeypatch.setattr(gifts, "CACHE_PATH", tmp_path / "gifts.json")
+    monkeypatch.setattr(gifts, "_seen", {})
+    gifts.record_metadata({"id": 812, "name": "Coin Test", "coin_count": 12,
+                           "diamond_count": 6, "image": {"url_list": []}}, save=False)
+    item = next(gift for gift in gifts.list_gifts() if gift["name"] == "Coin Test")
+    assert item["coins"] == 12
+    assert item["coins_estimated"] is False
+    assert item["diamonds"] == 6
+
+
 def test_catalog_rejects_non_tiktok_image_url(tmp_path, monkeypatch):
     monkeypatch.setattr(gifts, "CACHE_PATH", tmp_path / "gifts.json")
     monkeypatch.setattr(gifts, "_seen", {})
@@ -35,7 +58,10 @@ def test_public_catalog_keeps_100_popular_gifts_with_real_tiktok_art(tmp_path, m
     catalog = gifts.list_gifts()
     assert len(catalog) == 100
     assert all(gift["source"] == "tiktok-catalog" and gift["image_url"].startswith("https://") for gift in catalog)
-    assert next(gift for gift in catalog if gift["name"] == "Rose")["id"] == 1000
+    rose = next(gift for gift in catalog if gift["name"] == "Rose")
+    assert rose["id"] == 1000
+    assert rose["coins"] == 1
+    assert rose["coins_estimated"] is True
     assert len(list((tmp_path).glob("gifts.json"))) == 1
 
 

@@ -31,7 +31,7 @@ curl -X POST http://localhost:8000/api/bridge/event \
   -d '{"type":"gift","user":"viewer_123","nickname":"Viewer","gift_name":"Rose","diamonds":1,"source":"webhook"}'
 ```
 
-Supported event `type`: `gift`, `like`, `follow`, `comment`, `join`, `share`, `subscribe`.
+Supported event `type`: `gift`, `like`, `follow`, `comment`, `join`, `share`, `subscribe`. TikTok gift cost is paid by viewers in Coins; the separate `diamonds` event field is kept for the creator-side LIVE gift value and is not shown as the viewer's purchase price. Use the gift catalog's `coins` value for price sorting.
 
 For a protected webhook, set `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` in `.env` and send it in the `X-GiftStream-Secret` header.
 

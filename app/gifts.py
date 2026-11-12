@@ -24,7 +24,7 @@ LABEL_PL = {"Rose":"Róża", "Rosa":"Róża", "Dragon":"Smok", "Lion":"Lew",
 # First entries are familiar, frequently used gifts. The rest of the 100-card
 # showcase is filled from TikTok's current public catalog, favoring accessible gifts.
 POPULAR_GIFT_NAMES = (
-    "rose", "tiktok", "finger heart", "donut", "ice cream", "gg", "perfume",
+    "rose", "tiktok", "finger heart", "donut", "doughnut", "ice cream", "gg", "perfume",
     "heart me", "love you", "cap", "sunglasses", "paper crane", "hand hearts",
     "galaxy", "lion", "universe", "money gun", "swan", "fireworks", "dragon",
 )
@@ -81,6 +81,8 @@ def record_event(event: TikTokEvent) -> None:
                  "name": event.gift_name,
                  "label_pl": label_pl(event.gift_name),
                  "diamonds": event.diamonds or old.get("diamonds", 0),
+                 "coins": old.get("coins", event.diamonds or old.get("diamonds", 0)),
+                 "coins_estimated": old.get("coins_estimated", True),
                  "image_url": _safe_tiktok_image(event.gift_image_url) or old.get("image_url"),
                  "source": "tiktok-live" if event.source in {"tiktok", "managed"} else event.source,
                  "streakable": old.get("streakable", False)}
@@ -111,6 +113,13 @@ def record_metadata(gift: Any, source: str = "tiktok-live", save: bool = True) -
         diamonds = int(field(gift, "diamond_count", "diamondCount", "diamond_count_value", default=0) or 0)
     except (TypeError, ValueError):
         diamonds = 0
+    explicit_coins = field(gift, "coin_count", "coinCount", "coins")
+    try:
+        coins = int(explicit_coins if explicit_coins is not None else diamonds)
+    except (TypeError, ValueError):
+        coins = diamonds
+        explicit_coins = None
+    coins_estimated = explicit_coins is None
     try:
         gift_type = field(gift, "type", default=0)
         streakable = bool(field(gift, "streakable", default=gift_type == 1))
@@ -120,7 +129,8 @@ def record_metadata(gift: Any, source: str = "tiktok-live", save: bool = True) -
     with _cache_lock:
         previous = _seen.get(key, {})
         _seen[key] = {"id": gift_id, "name": str(name), "label_pl": label_pl(str(name)),
-                      "diamonds": diamonds, "image_url": image_url or previous.get("image_url"),
+                      "diamonds": diamonds, "coins": coins, "coins_estimated": coins_estimated,
+                      "image_url": image_url or previous.get("image_url"),
                       "source": source, "streakable": streakable}
         if save:
             _save()
@@ -130,10 +140,10 @@ def _popular_rank(gift: Any) -> tuple[int, int, str]:
     name = str(gift.get("name", "")).casefold()
     rank = next((i for i, candidate in enumerate(POPULAR_GIFT_NAMES) if candidate in name), len(POPULAR_GIFT_NAMES))
     try:
-        diamonds = int(gift.get("diamonds") or 0)
+        coins = int(gift.get("coins", gift.get("diamonds", 0)) or 0)
     except (TypeError, ValueError):
-        diamonds = 0
-    return rank, diamonds, name
+        coins = 0
+    return rank, coins, name
 
 
 def record_catalog(entries: Any) -> int:
@@ -192,8 +202,8 @@ def refresh_tiktok_catalog() -> int:
         return asyncio.run(fetch())
 
 
-def list_gifts(query: str = "") -> list[dict[str, Any]]:
-    """Combine examples with observed gift data; observed IDs win."""
+def list_gifts(query: str = "", sort: str = "price_asc") -> list[dict[str, Any]]:
+    """Combine gift sources and sort by TikTok gift prominence or viewer coin cost."""
     merged: dict[str, dict[str, Any]] = {}
     with _cache_lock:
         seen = {key: dict(gift) for key, gift in _seen.items()}
@@ -209,8 +219,16 @@ def list_gifts(query: str = "") -> list[dict[str, Any]]:
         if name_key in merged:
             merged.pop(name_key, None)
     entries = list(merged.values())
+    for gift in entries:
+        # Older caches contain only TikTokLive's diamond_count, so expose that as an estimate.
+        gift["coins_estimated"] = bool(gift.get("coins_estimated", "coins" not in gift))
+        gift["coins"] = int(gift.get("coins", gift.get("diamonds", 0)) or 0)
     if query.strip():
         q = query.strip().casefold()
         entries = [g for g in entries if q in str(g.get("name", "")).casefold()
                    or q in str(g.get("label_pl", "")).casefold()]
-    return sorted(entries, key=lambda g: (int(g.get("diamonds") or 0), str(g.get("name", "")).casefold()))
+    if sort == "popular":
+        return sorted(entries, key=_popular_rank)
+    if sort == "price_desc":
+        return sorted(entries, key=lambda g: (-g["coins"], str(g.get("name", "")).casefold()))
+    return sorted(entries, key=lambda g: (g["coins"], str(g.get("name", "")).casefold()))

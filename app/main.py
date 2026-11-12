@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from dotenv import load_dotenv
@@ -273,8 +273,8 @@ async def update_config(data: dict[str, Any]) -> dict:
     return public_config()
 
 @app.get("/api/gifts")
-async def gifts(q: str = "") -> list[dict]:
-    return list_gifts(q)
+async def gifts(q: str = "", sort: Literal["popular", "price_asc", "price_desc"] = "price_asc") -> list[dict]:
+    return list_gifts(q, sort)
 
 @app.post("/api/gifts/refresh")
 async def refresh_gifts() -> dict:

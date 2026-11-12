@@ -59,6 +59,15 @@ def test_gift_catalog_refresh_endpoint_returns_latest_catalog(monkeypatch):
     assert len(result["gifts"]) == 100
 
 
+def test_gift_endpoint_accepts_supported_sort_orders():
+    client = TestClient(main.app)
+    for order in ("popular", "price_asc", "price_desc"):
+        response = client.get("/api/gifts", params={"sort": order})
+        assert response.status_code == 200
+        assert all("coins" in gift for gift in response.json())
+    assert client.get("/api/gifts", params={"sort": "random"}).status_code == 422
+
+
 def test_live_audio_preferences_are_persisted_without_exposing_secrets(monkeypatch):
     monkeypatch.setattr(main, "config", AppConfig())
     monkeypatch.setattr(main, "save_config", lambda: None)
