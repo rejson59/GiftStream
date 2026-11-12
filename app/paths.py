@@ -1,4 +1,4 @@
-"""Ścieżki zasobów aplikacji i lokalnych danych użytkownika."""
+"""Paths for GiftStream resources and user data."""
 from __future__ import annotations
 
 import json
@@ -6,20 +6,19 @@ import os
 import sys
 from pathlib import Path
 
-# Keep the legacy directory so existing TipStream users retain settings and update state.
-APP_NAME = "TipStream"
+APP_NAME = "GiftStream"
 
 
 def bundle_root() -> Path:
-    """Katalog zasobów dołączonych do aplikacji (PyInstaller lub checkout)."""
+    """Directory containing resources bundled by PyInstaller or the checkout."""
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)  # type: ignore[attr-defined]
     return Path(__file__).resolve().parent.parent
 
 
 def data_dir() -> Path:
-    """Trwały katalog ustawień, presetów i historii, poza one-file EXE."""
-    override = os.environ.get("TIPSTREAM_DATA_DIR")
+    """Persistent settings and update directory outside the one-file executable."""
+    override = os.environ.get("GIFTSTREAM_DATA_DIR")
     if override:
         path = Path(override).expanduser()
     elif getattr(sys, "frozen", False):

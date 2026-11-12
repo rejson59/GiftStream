@@ -1,33 +1,21 @@
-# GiftStream dla Windows: aplikacja, instalator i aktualizacje
+# GiftStream dla Windows: jedna aplikacja, samodzielne aktualizacje
 
-## Instalacja i uruchamianie
+## Uruchamianie
 
-- `GiftStream-Setup-win-x64.exe` instaluje launcher per-user do `%LOCALAPPDATA%\Programs\GiftStream`, tworzy pozycję GiftStream w menu Start i na liście aplikacji Windows. Opcjonalny skrót na pulpicie można zaznaczyć w instalatorze.
-- Instalator uruchamia Microsoft Edge WebView2 Evergreen Bootstrapper. WebView2 zapewnia natywne okno z osadzonym panelem; nie otwieramy osobnej przeglądarki. Wymagane jest połączenie z internetem, jeśli runtime WebView2 nie jest jeszcze zainstalowany.
-- `GiftStream.exe` jest dostępny osobno jako przenośny launcher. `TipStream.exe` pozostaje zgodnościowym aliasem.
-- Aby dodać aplikację do paska zadań, uruchom GiftStream z menu Start, kliknij prawym przyciskiem jego ikonę na pasku i wybierz **Przypnij do paska zadań**. Windows nie udostępnia wspieranego sposobu, by instalator przypinał aplikację automatycznie.
-- Standardowe odinstalowanie usuwa pliki programu i skróty, ale nie kasuje danych użytkownika.
+GiftStream jest dostarczany jako jeden plik `GiftStream.exe`. Nie ma osobnego launchera ani instalatora. Po uruchomieniu aplikacja umieszcza własną kopię w `%LOCALAPPDATA%\GiftStream\versions\<wersja>`, zachowuje ustawienia w `%LOCALAPPDATA%\GiftStream` i tworzy albo odświeża skrót `GiftStream` w menu Start. W menu Start znajduje się skrót do aktualnego pliku aplikacji.
 
-## Aktualizacje i dane
+Panel działa w natywnym oknie GiftStream z osadzonym Microsoft Edge WebView2. Instalacja Pythona nie jest wymagana. Jeśli WebView2 nie jest dostępny, GiftStream pokaże błąd uruchomienia; runtime można pobrać z oficjalnej strony Microsoft.
 
-Launcher sprawdza wydanie przy każdym uruchomieniu i w razie potrzeby pobiera nową aplikację desktopową do katalogu wersjonowanego w danych użytkownika, po czym uruchamia ją w natywnym oknie GiftStream. Nie trzeba ponownie pobierać instalatora, klikać linku ani reinstalować programu. Sama aplikacja sprawdza też wydania co 30 minut (pierwsze sprawdzenie krótko po uruchomieniu) i udostępnia przycisk **Sprawdź aktualizacje** do ręcznego sprawdzenia. Aktualizacja pobiera się w tle; gotowa wersja uruchomi się automatycznie przy następnym starcie GiftStream z menu Start lub skrótu. Bieżąca transmisja nie jest przerywana ani restartowana w trakcie działania. Presety, integracje i ustawienia pozostają w dotychczasowym katalogu danych.
+## Aktualizacje
 
-Dla zgodności z istniejącymi użytkownikami:
+Przy starcie i następnie co 30 minut GiftStream sprawdza najnowsze wydanie GitHub. Aktualizacja jest pobierana jako nowe `GiftStream.exe`, weryfikowana przez SHA-256 i zapisywana w katalogu wersji. Jeśli aktualizacja zostanie znaleziona podczas startu, GiftStream uruchamia ją przed pokazaniem okna. Kontrola okresowa nie przerywa transmisji: aplikacja odświeża skrót menu Start, aby kolejne uruchomienie wybrało nową wersję. Przycisk **Sprawdź aktualizacje** uruchamia kontrolę ręcznie.
 
-- wersje i dane użytkownika pozostają w `%LOCALAPPDATA%\TipStream`,
-- `TipStream.exe` jest nadal publikowany jako alias,
-- wewnętrzny pakiet aktualizacji zachowuje nazwy `TipStreamApp.exe` i `TipStreamApp-win-x64.zip`,
-- poprzedni adres repozytorium `rejson59/TipStream` przekierowuje do `rejson59/GiftStream`,
-- identyfikatory `TIPSTREAM_*` i nagłówek webhooka `X-TipStream-Secret` nie zmieniają się.
+Wydanie zawiera tylko `GiftStream.exe` oraz `checksums.txt`. Workflow `.github/workflows/release-windows.yml` buduje pojedynczy plik aplikacji po utworzeniu taga w formacie `vX.Y.Z`.
 
-## Zawartość wydania
+## Dane
 
-Workflow `.github/workflows/release-windows.yml` uruchamia się po tagu semver, np. `v0.3.0`. Na Windows uruchamia testy i buduje PyInstallerem aplikację, launcher oraz Inno Setup installer. Release zawiera:
+Ustawienia, presety, katalog giftów i historia są przechowywane w `%LOCALAPPDATA%\GiftStream`. Użytkownik wybrał czystą instalację: nowe wydanie nie importuje danych z poprzednich instalacji.
 
-- `GiftStream-Setup-win-x64.exe` — zalecana instalacja z menu Start i opcjonalnym skrótem na pulpicie,
-- `GiftStream.exe` — przenośny launcher,
-- `TipStream.exe` — zgodnościowy alias dla starszych użytkowników,
-- `TipStreamApp-win-x64.zip` i `checksums.txt` — wstecznie zgodny format aktualizacji,
-Instalator zawiera Microsoft Edge WebView2 bootstrapper, niezbędny do przygotowania runtime przy pierwszej instalacji.
+## Bezpieczeństwo
 
-SHA-256 wykrywa uszkodzenie albo niepełne pobranie, ale nie zastępuje podpisu kodu. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może wyświetlać ostrzeżenie.
+Suma SHA-256 wykrywa uszkodzenie lub niepełne pobranie, ale nie zastępuje podpisu Authenticode. Plik nie jest podpisany, więc Windows SmartScreen może wyświetlić ostrzeżenie.

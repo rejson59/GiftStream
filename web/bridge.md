@@ -14,7 +14,7 @@ curl -X POST http://localhost:8000/api/bridge/event \
   -d '{"type":"gift","user":"viewer_123","gift_name":"Rose","diamonds":1,"source":"webhook"}'
 ```
 
-If `BRIDGE_WEBHOOK_SECRET` is set, include `-H 'X-TipStream-Secret: your-secret'`. Event types: `gift`, `like`, `follow`, `comment`, `join`, `share`, `subscribe`.
+If `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` is set, include `-H 'X-GiftStream-Secret: your-secret'`. Event types: `gift`, `like`, `follow`, `comment`, `join`, `share`, `subscribe`.
 
 ## UDP and JSONL
 

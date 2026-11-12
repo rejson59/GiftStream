@@ -27,6 +27,7 @@ from .minecraft import ServerTapClient, validate_base_url
 from .models import AppConfig, GameAction, Preset, TikTokEvent
 from .paths import bundle_root, data_dir, installed_release_tag
 from .tiktok_connector import TikTokConnector
+from .version import VERSION
 from . import update_state
 
 load_dotenv()
@@ -37,7 +38,7 @@ CONFIG_PATH = DATA / "config.json"
 GITHUB_RELEASES_URL = "https://github.com/rejson59/GiftStream/releases"
 _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
-app = FastAPI(title="GiftStream", version="0.4.2",
+app = FastAPI(title="GiftStream", version=VERSION,
               description="Prezenty z TikTok LIVE sterują grą")
 connector: TikTokConnector
 config = AppConfig()
@@ -114,7 +115,7 @@ def public_config() -> dict:
     data.pop("minecraft_api_key", None)
     data.pop("bridge_webhook_secret", None)
     data["minecraft_has_key"] = bool(config.minecraft_api_key)
-    data["bridge_has_secret"] = bool(config.bridge_webhook_secret or os.getenv("BRIDGE_WEBHOOK_SECRET", ""))
+    data["bridge_has_secret"] = bool(config.bridge_webhook_secret or os.getenv("GIFTSTREAM_BRIDGE_WEBHOOK_SECRET", ""))
     return data
 
 
@@ -200,17 +201,18 @@ async def apply_downloaded_update() -> dict:
 
 @app.get("/api/download-info")
 async def download_info() -> dict:
-    """Returns the latest Windows launcher URL when a release has been published."""
+    """Return the single GiftStream executable download URL."""
     now = time.time()
     if _DOWNLOAD_INFO_CACHE["data"] is not None and now < _DOWNLOAD_INFO_CACHE["expires"]:
         return _DOWNLOAD_INFO_CACHE["data"]
     fallback = {"available": False, "url": GITHUB_RELEASES_URL,
                 "releases_url": GITHUB_RELEASES_URL,
                 "message": "Wydanie GiftStream dla Windows nie jest obecnie dostępne."}
+
     def check_github_release() -> dict:
         request = urllib.request.Request(
             "https://api.github.com/repos/rejson59/GiftStream/releases/latest",
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "GiftStream-Preview/1"},
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "GiftStream/1"},
         )
         try:
             with urllib.request.urlopen(request, timeout=4) as response:
@@ -219,22 +221,20 @@ async def download_info() -> dict:
             if exc.code == 404:
                 return fallback
             raise
-        assets = {a.get("name"): a for a in release.get("assets", [])}
-        installer = assets.get("GiftStream-Setup-win-x64.exe")
-        asset = installer or assets.get("GiftStream.exe") or assets.get("TipStream.exe")
+        assets = {asset.get("name"): asset for asset in release.get("assets", [])}
+        asset = assets.get("GiftStream.exe")
         asset_url = str((asset or {}).get("browser_download_url", ""))
         if asset and asset_url.startswith("https://github.com/"):
-            download_kind = "instalator" if installer else "wersję przenośną"
-            return {"available": True, "kind": "installer" if installer else "portable",
-                    "url": asset_url, "releases_url": GITHUB_RELEASES_URL,
-                    "version": release.get("tag_name", ""),
-                    "message": f"Pobierz {download_kind} GiftStream {release.get('tag_name', '')} dla Windows."}
+            version = release.get("tag_name", "")
+            return {"available": True, "kind": "application", "url": asset_url,
+                    "releases_url": GITHUB_RELEASES_URL, "version": version,
+                    "message": f"Pobierz GiftStream {version} dla Windows."}
         return fallback
 
     try:
         result = await asyncio.to_thread(check_github_release)
     except Exception:
-        result = {**fallback, "message": "Nie udało się sprawdzić wydań. Otwórz stronę GitHub Releases."}
+        result = {**fallback, "message": "Nie udało się sprawdzić wydań. Otwórz stronę wydań GiftStream."}
     _DOWNLOAD_INFO_CACHE.update({"data": result, "expires": now + (300 if result["available"] else 60)})
     return result
 
@@ -451,10 +451,10 @@ async def simulate(req: SimulateRequest) -> dict:
     return {"ok": True, "event": ev.model_dump()}
 
 @app.post("/api/bridge/event")
-async def bridge_event(ev: TikTokEvent, x_tipstream_secret: str | None = Header(default=None)) -> dict:
-    secret = config.bridge_webhook_secret or os.getenv("BRIDGE_WEBHOOK_SECRET", "")
-    if secret and not secrets.compare_digest(x_tipstream_secret or "", secret):
-        raise HTTPException(401, "Invalid or missing X-TipStream-Secret")
+async def bridge_event(ev: TikTokEvent, x_giftstream_secret: str | None = Header(default=None)) -> dict:
+    secret = config.bridge_webhook_secret or os.getenv("GIFTSTREAM_BRIDGE_WEBHOOK_SECRET", "")
+    if secret and not secrets.compare_digest(x_giftstream_secret or "", secret):
+        raise HTTPException(401, "Invalid or missing X-GiftStream-Secret")
     await process_event(ev)
     return {"ok": True}
 

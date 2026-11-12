@@ -16,13 +16,11 @@
 
 ## Aplikacja Windows i automatyczne aktualizacje
 
-**GiftStream dla Windows jest dostępny.** Pobierz [instalator GiftStream](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream-Setup-win-x64.exe) albo pobierz [wersję przenośną](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream.exe). Instalator tworzy wpis GiftStream w menu Start i na liście aplikacji Windows; opcjonalnie doda skrót na pulpicie. Z menu Start możesz przypiąć GiftStream do paska zadań. Windows nie pozwala instalatorom przypinać aplikacji do paska automatycznie.
+**GiftStream dla Windows to jeden samodzielny plik EXE.** Pobierz [GiftStream.exe](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream.exe) i uruchom go — osobny instalator ani launcher nie są potrzebne. Przy pierwszym uruchomieniu aplikacja zapisze swoją kopię w `%LOCALAPPDATA%\GiftStream`, utworzy skrót GiftStream w menu Start i uruchomi natywne okno z osadzonym WebView2. Python nie musi być zainstalowany; WebView2 musi być dostępny w Windows.
 
-Panel uruchamia się w natywnym oknie aplikacji z osadzonym WebView2 — nie otwiera osobnej karty przeglądarki. Instalator dostarcza bootstrapper WebView2 i doinstaluje runtime, jeśli go brakuje. Python nie musi być zainstalowany.
+Aplikacja sprawdza aktualizacje podczas uruchamiania oraz co 30 minut i ma przycisk „Sprawdź aktualizacje”. Pobiera zweryfikowaną sumą SHA-256 kopię tego samego pliku GiftStream.exe. Jeśli aktualizacja zostanie znaleziona przy uruchamianiu, nowa wersja otworzy się od razu; aktualizacja pobrana podczas pracy nie przerywa transmisji, a skrót Start wskazuje już nową wersję. Dane aplikacji są przechowywane w `%LOCALAPPDATA%\GiftStream`. Nowa instalacja zaczyna z czystymi ustawieniami i nie importuje danych poprzednich wersji.
 
-Otwarta aplikacja sprawdza aktualizacje co 30 minut (pierwszy raz krótko po starcie) i ma przycisk „Sprawdź aktualizacje”; pobiera je w tle, nie przerywając transmisji. Gotowa wersja uruchomi się automatycznie przy następnym starcie z menu Start lub skrótu — bez ponownego pobierania instalatora. Presety, ustawienia, katalog giftów i historia są zachowane w `%LOCALAPPDATA%\TipStream`; przy problemie z siecią launcher uruchomi ostatnią poprawnie pobraną wersję.
-
-Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z`. Wewnętrzne nazwy paczek `TipStreamApp` i folder `%LOCALAPPDATA%\TipStream` pozostają dla zgodności ze starszymi instalacjami. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
+Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z` i zawierają wyłącznie `GiftStream.exe` oraz plik sumy kontrolnej. Plik nie jest podpisany Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
 
 ## Uruchomienie deweloperskie
 
@@ -53,7 +51,7 @@ Formaty WebSocket, HTTP webhook, UDP oraz JSONL opisuje [`docs/BRIDGE.md`](docs/
 
 ## Zmienne środowiskowe
 
-Skopiuj `.env.example` do `.env`. `TIKTOOL_API_KEY` włącza tryb zewnętrznego API; `BRIDGE_WEBHOOK_SECRET` chroni zdalne webhooki. Nie commituj sekretów. Klucz ServerTap jest przechowywany w lokalnym `config.json`, pomijanym przez Git; ustaw HTTPS/VPN i zabezpiecz tę maszynę.
+Skopiuj `.env.example` do `.env`. `TIKTOOL_API_KEY` włącza tryb zewnętrznego API; `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` chroni zdalne webhooki. Nie commituj sekretów. Klucz ServerTap jest przechowywany w lokalnym `config.json`, pomijanym przez Git; ustaw HTTPS/VPN i zabezpiecz tę maszynę.
 
 ## Architektura
 

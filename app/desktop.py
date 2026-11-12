@@ -19,9 +19,11 @@ if __package__ in (None, ""):
 from app import update_state
 from app.main import app
 from app.paths import data_dir, installed_release_tag
+from app.shortcuts import create_start_menu_shortcut
 from app.updater import prepare_latest
+from app.version import RELEASE_TAG
 
-GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
+GITHUB_REPOSITORY = os.environ.get("GIFTSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
 UPDATE_CHECK_SECONDS = 30 * 60
 FIRST_UPDATE_CHECK_SECONDS = 15
 
@@ -84,6 +86,7 @@ class GiftStreamDesktop:
                 try:
                     tag, executable, updated, message = prepare_latest(GITHUB_REPOSITORY, data_dir())
                     if updated and tag != self.current_tag:
+                        create_start_menu_shortcut(executable)
                         update_state.publish_update(tag, executable)
                 except Exception as exc:
                     # Network trouble must never interrupt the running stream or UI.
@@ -98,32 +101,17 @@ class GiftStreamDesktop:
             remaining = max(0.05, next_check - time.monotonic())
             self.stop_event.wait(min(0.25, remaining))
 
-    @staticmethod
-    def _ps_quote(value: str | Path) -> str:
-        return "'" + str(value).replace("'", "''") + "'"
-
     def _apply_update(self, executable: Path) -> bool:
         if os.name != "nt":
             return False
-        script_path = data_dir() / "restart_giftstream.ps1"
-        script = (
-            f"$oldPid = {os.getpid()}\n"
-            f"while (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}\n"
-            f"Start-Process -FilePath {self._ps_quote(executable)} -WorkingDirectory {self._ps_quote(data_dir())}\n"
-            f"Remove-Item -LiteralPath {self._ps_quote(script_path)} -Force -ErrorAction SilentlyContinue\n"
-        )
         try:
-            script_path.write_text(script, encoding="utf-8")
+            create_start_menu_shortcut(executable)
             flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-            subprocess.Popen(
-                ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
-                creationflags=flags,
-                close_fds=True,
-            )
+            subprocess.Popen([str(executable)], cwd=str(data_dir()), creationflags=flags, close_fds=True)
             self.stop()
             return True
         except OSError:
-            # Keep the downloaded update available so the user can retry.
+            # Keep the downloaded update available so it can be retried at next launch.
             return False
 
     def stop(self) -> None:
@@ -162,7 +150,7 @@ class GiftStreamDesktop:
                     import ctypes
                     ctypes.windll.user32.MessageBoxW(
                         0,
-                        f"Nie udało się uruchomić okna GiftStream. Zainstaluj aplikację instalatorem, który przygotowuje Microsoft Edge WebView2.\n\n{exc}",
+                        f"Nie udało się uruchomić okna GiftStream. Sprawdź, czy Microsoft Edge WebView2 jest dostępny w systemie.\n\n{exc}",
                         "GiftStream",
                         0x10,
                     )
@@ -175,8 +163,39 @@ class GiftStreamDesktop:
             update_state.clear()
 
 
+def _start_installed_version_if_needed() -> bool:
+    """Self-update this app before showing its UI, then point Start Menu at it."""
+    if not getattr(sys, "frozen", False) or os.name != "nt":
+        return False
+
+    running_executable = Path(sys.executable).resolve()
+    try:
+        _tag, latest_executable, _updated, _message = prepare_latest(
+            GITHUB_REPOSITORY,
+            data_dir(),
+            running_executable=running_executable,
+            running_tag=RELEASE_TAG,
+        )
+    except Exception:
+        # A first launch without network still runs the executable the user opened.
+        create_start_menu_shortcut(running_executable)
+        return False
+
+    create_start_menu_shortcut(latest_executable)
+    if latest_executable.resolve() == running_executable:
+        return False
+
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    try:
+        subprocess.Popen([str(latest_executable)], cwd=str(data_dir()), creationflags=flags, close_fds=True)
+        return True
+    except OSError:
+        return False
+
+
 def main() -> None:
-    GiftStreamDesktop().run()
+    if not _start_installed_version_if_needed():
+        GiftStreamDesktop().run()
 
 
 if __name__ == "__main__":

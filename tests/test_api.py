@@ -15,13 +15,10 @@ def test_public_config_never_returns_integration_secrets(monkeypatch):
     assert data["bridge_has_secret"] is True
 
 
-def test_download_info_prefers_installer_then_new_and_legacy_launchers(monkeypatch):
+def test_download_info_returns_the_single_application_executable(monkeypatch):
     original_cache = main._DOWNLOAD_INFO_CACHE.copy()
 
     class Response:
-        def __init__(self, assets):
-            self.payload = {"tag_name": "v0.3.0", "assets": assets}
-
         def __enter__(self):
             return self
 
@@ -30,34 +27,17 @@ def test_download_info_prefers_installer_then_new_and_legacy_launchers(monkeypat
 
         def read(self):
             import json
-            return json.dumps(self.payload).encode()
+            return json.dumps({"tag_name": "v0.5.0", "assets": [
+                {"name": "GiftStream.exe", "browser_download_url": "https://github.com/releases/GiftStream.exe"},
+            ]}).encode()
 
-    assets = [
-        {"name": "GiftStream-Setup-win-x64.exe", "browser_download_url": "https://github.com/releases/GiftStream-Setup-win-x64.exe"},
-        {"name": "GiftStream.exe", "browser_download_url": "https://github.com/releases/GiftStream.exe"},
-        {"name": "TipStream.exe", "browser_download_url": "https://github.com/releases/TipStream.exe"},
-    ]
-    monkeypatch.setattr(main.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(assets))
+    monkeypatch.setattr(main.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
     main._DOWNLOAD_INFO_CACHE.update({"expires": 0, "data": None})
-    client = TestClient(main.app)
-    result = client.get("/api/download-info").json()
-    assert result["available"] is True
-    assert result["url"].endswith("GiftStream-Setup-win-x64.exe")
-    assert result["kind"] == "installer"
-    assert result["version"] == "v0.3.0"
-
-    monkeypatch.setattr(main.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(assets[1:]))
-    main._DOWNLOAD_INFO_CACHE.update({"expires": 0, "data": None})
-    result = client.get("/api/download-info").json()
+    result = TestClient(main.app).get("/api/download-info").json()
     assert result["available"] is True
     assert result["url"].endswith("GiftStream.exe")
-    assert result["kind"] == "portable"
-
-    monkeypatch.setattr(main.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(assets[2:]))
-    main._DOWNLOAD_INFO_CACHE.update({"expires": 0, "data": None})
-    result = client.get("/api/download-info").json()
-    assert result["available"] is True
-    assert result["url"].endswith("TipStream.exe")
+    assert result["kind"] == "application"
+    assert result["version"] == "v0.5.0"
     main._DOWNLOAD_INFO_CACHE.update(original_cache)
 
 
@@ -97,7 +77,7 @@ def test_update_ui_can_only_request_a_published_update(tmp_path):
     assert client.get("/api/updates/status").json()["available"] is False
     assert client.post("/api/updates/apply").status_code == 409
 
-    executable = tmp_path / "GiftStreamApp.exe"
+    executable = tmp_path / "GiftStream.exe"
     update_state.publish_update("v0.3.0", executable)
     status = client.get("/api/updates/status").json()
     assert status["available"] is True
