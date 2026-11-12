@@ -8,7 +8,7 @@ Panel działa w natywnym oknie GiftStream z osadzonym Microsoft Edge WebView2. I
 
 ## Aktualizacje
 
-Przy starcie i następnie co 30 minut GiftStream sprawdza najnowsze wydanie GitHub. Aktualizacja jest pobierana jako nowe `GiftStream.exe`, weryfikowana przez SHA-256 i zapisywana w katalogu wersji. Jeśli aktualizacja zostanie znaleziona podczas startu, GiftStream uruchamia ją przed pokazaniem okna. Kontrola okresowa nie przerywa transmisji: aplikacja odświeża skrót menu Start, aby kolejne uruchomienie wybrało nową wersję. Przycisk **Sprawdź aktualizacje** uruchamia kontrolę ręcznie.
+Przy starcie i następnie co 30 minut GiftStream sprawdza najnowsze wydanie GitHub. Aktualizacja jest pobierana jako nowe `GiftStream.exe`, weryfikowana przez SHA-256 i zapisywana w katalogu wersji. Jeśli aktualizacja zostanie znaleziona podczas startu, GiftStream uruchamia ją przed pokazaniem okna. Jeśli pobieranie zakończy się w działającej aplikacji Windows, GiftStream automatycznie uruchamia nową wersję i zamyka starą. Może to na chwilę przerwać odbieranie zdarzeń przez GiftStream; sama transmisja TikTok pozostaje uruchomiona, ale po restarcie może być potrzebne ponowne połączenie aplikacji. W pasku aktualizacji jest też przycisk ręcznego ponowienia. Przycisk **Sprawdź aktualizacje** uruchamia kontrolę ręcznie.
 
 Wydanie zawiera tylko `GiftStream.exe` oraz `checksums.txt`. Workflow `.github/workflows/release-windows.yml` buduje pojedynczy plik aplikacji po utworzeniu taga w formacie `vX.Y.Z`.
 

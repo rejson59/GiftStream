@@ -26,6 +26,14 @@ from app.version import RELEASE_TAG
 GITHUB_REPOSITORY = os.environ.get("GIFTSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
 UPDATE_CHECK_SECONDS = 30 * 60
 FIRST_UPDATE_CHECK_SECONDS = 15
+IS_WINDOWS = os.name == "nt"
+
+
+def _publish_downloaded_update(tag: str, executable: Path) -> None:
+    """Publish a verified update and automatically schedule its Windows restart."""
+    update_state.publish_update(tag, executable)
+    if IS_WINDOWS:
+        update_state.request_apply()
 
 
 class GiftStreamDesktop:
@@ -87,7 +95,7 @@ class GiftStreamDesktop:
                     tag, executable, updated, message = prepare_latest(GITHUB_REPOSITORY, data_dir())
                     if updated and tag != self.current_tag:
                         create_start_menu_shortcut(executable)
-                        update_state.publish_update(tag, executable)
+                        _publish_downloaded_update(tag, executable)
                 except Exception as exc:
                     # Network trouble must never interrupt the running stream or UI.
                     message = f"Nie udało się sprawdzić aktualizacji: {exc}"
