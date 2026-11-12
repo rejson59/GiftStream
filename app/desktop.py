@@ -20,7 +20,7 @@ from app.main import app
 from app.paths import data_dir, installed_release_tag
 from app.updater import prepare_latest
 
-GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/TipStream")
+GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
 UPDATE_CHECK_SECONDS = 60 * 60
 
 

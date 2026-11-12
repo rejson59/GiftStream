@@ -33,7 +33,7 @@ ROOT = bundle_root()
 DATA = data_dir()
 WEB = ROOT / "web"
 CONFIG_PATH = DATA / "config.json"
-GITHUB_RELEASES_URL = "https://github.com/rejson59/TipStream/releases"
+GITHUB_RELEASES_URL = "https://github.com/rejson59/GiftStream/releases"
 _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
 app = FastAPI(title="GiftStream", version="0.2.0",
@@ -177,7 +177,7 @@ async def download_info() -> dict:
                 "message": "Wydanie GiftStream dla Windows nie jest obecnie dostępne."}
     def check_github_release() -> dict:
         request = urllib.request.Request(
-            "https://api.github.com/repos/rejson59/TipStream/releases/latest",
+            "https://api.github.com/repos/rejson59/GiftStream/releases/latest",
             headers={"Accept": "application/vnd.github+json", "User-Agent": "GiftStream-Preview/1"},
         )
         try:

@@ -16,11 +16,11 @@
 
 ## Aplikacja Windows i automatyczne aktualizacje
 
-**GiftStream dla Windows jest dostępny.** Pobierz [GiftStream.exe z GitHub Releases](https://github.com/rejson59/TipStream/releases/latest). To mały launcher: przy pierwszym uruchomieniu pobiera desktopową aplikację, a przy kolejnych uruchomieniach sprawdza najnowszą wersję. Python nie musi być zainstalowany.
+**GiftStream dla Windows jest dostępny.** Pobierz [GiftStream.exe z GitHub Releases](https://github.com/rejson59/GiftStream/releases/latest). To mały launcher: przy pierwszym uruchomieniu pobiera desktopową aplikację, a przy kolejnych uruchomieniach sprawdza najnowszą wersję. Python nie musi być zainstalowany.
 
 Otwarta aplikacja sprawdza aktualizacje co godzinę i pobiera je w tle, nie przerywając transmisji. Po pobraniu pokaże przycisk do zastosowania aktualizacji. Presety, ustawienia, gift-katalog i historia są zachowane w `%LOCALAPPDATA%\TipStream` — dotychczasowej ścieżce zgodności, więc wcześniejsze dane TipStream pozostają dostępne. Przy problemie z siecią launcher uruchomi ostatnią poprawnie pobraną wersję.
 
-Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z`. Repozytorium GitHub i wewnętrzne nazwy paczek `TipStreamApp` pozostają bez zmian dla zgodności z już pobranymi launcherami; nowy launcher nazywa się `GiftStream.exe`. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
+Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z`. Nowy launcher nazywa się `GiftStream.exe`. Wewnętrzne nazwy paczek `TipStreamApp` i folder `%LOCALAPPDATA%\TipStream` pozostają dla zgodności ze starszymi instalacjami. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
 
 ## Uruchomienie deweloperskie
 

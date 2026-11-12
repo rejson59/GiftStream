@@ -2,7 +2,7 @@
 
 ## Model dystrybucji
 
-- `GiftStream.exe` jest nowym launcherem użytkownika. Przy każdym uruchomieniu sprawdza najnowsze publiczne wydanie w repozytorium GitHub `rejson59/TipStream`.
+- `GiftStream.exe` jest nowym launcherem użytkownika. Przy każdym uruchomieniu sprawdza najnowsze publiczne wydanie w repozytorium GitHub `rejson59/GiftStream`.
 - `TipStream.exe` jest dołączany jako zgodnościowy alias, aby istniejące instalacje GiftStream/TipStream nadal mogły pobierać aktualizacje.
 - `TipStreamApp-win-x64.zip` zawiera desktopową aplikację (`TipStreamApp.exe`), lokalny serwer i zasoby panelu. Nazwy wewnętrznej paczki pozostają stabilne dla launchera v0.1.0.
 - `checksums.txt` zawiera SHA-256 paczki aplikacji. Launcher pobiera assety przez HTTPS, porównuje sumę i odrzuca uszkodzoną lub niezgodną paczkę.
@@ -18,7 +18,7 @@ Workflow `.github/workflows/release-windows.yml` uruchamia się po wypchnięciu 
 - `TipStream.exe` — zgodnościowy alias dla istniejących użytkowników,
 - `TipStreamApp-win-x64.zip` i `checksums.txt` — format aktualizacji zachowujący zgodność z launcherem v0.1.0.
 
-Adres repozytorium GitHub i identyfikatory API `TIPSTREAM_*` / `X-TipStream-Secret` pozostają niezmienione, aby aktualizacje oraz istniejące integracje nadal działały. Folder `%LOCALAPPDATA%\TipStream` jest celowo zachowany.
+Stary adres repozytorium `rejson59/TipStream` jest przekierowywany do `rejson59/GiftStream`. Identyfikatory API `TIPSTREAM_*` / `X-TipStream-Secret` pozostają niezmienione, aby starsze instalacje i integracje nadal działały. Folder `%LOCALAPPDATA%\TipStream` jest celowo zachowany.
 
 ## Bezpieczeństwo i ograniczenia
 

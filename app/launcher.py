@@ -16,7 +16,7 @@ if __package__ in (None, ""):
 from app.paths import data_dir
 from app.updater import UpdateError, prepare_latest
 
-GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/TipStream")
+GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
 
 
 class Launcher:
