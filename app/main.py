@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from . import presets as preset_store
 from .bridge import Hub
 from .engine import Engine
-from .gifts import list_gifts, record_event
+from .gifts import list_gifts, record_event, refresh_tiktok_catalog
 from .games import GAMES, get_game
 from .minecraft import ServerTapClient, validate_base_url
 from .models import AppConfig, GameAction, Preset, TikTokEvent
@@ -37,7 +37,7 @@ CONFIG_PATH = DATA / "config.json"
 GITHUB_RELEASES_URL = "https://github.com/rejson59/GiftStream/releases"
 _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
-app = FastAPI(title="GiftStream", version="0.3.0",
+app = FastAPI(title="GiftStream", version="0.4.0",
               description="Prezenty z TikTok LIVE sterują grą")
 connector: TikTokConnector
 config = AppConfig()
@@ -92,6 +92,8 @@ async def process_event(ev: TikTokEvent) -> None:
 
 
 connector = TikTokConnector(process_event)
+_catalog_refresh_task: asyncio.Task | None = None
+_catalog_refresh_started = False
 
 
 def read_config() -> AppConfig:
@@ -122,13 +124,25 @@ def sync_minecraft_client() -> None:
     minecraft_bridge.player = config.minecraft_player
 
 
+def _refresh_catalog_safely() -> int:
+    try:
+        return refresh_tiktok_catalog()
+    except Exception:
+        # Keep the last valid catalog and let the local gallery work offline.
+        return 0
+
+
 @app.on_event("startup")
 async def startup() -> None:
-    global config
+    global config, _catalog_refresh_task, _catalog_refresh_started
     preset_store.ensure_default()
     config = read_config()
     sync_minecraft_client()
     engine.load_preset(config.active_preset_id)
+    # TikTok's public catalog is loaded once in the background; the panel remains usable offline.
+    if not _catalog_refresh_started:
+        _catalog_refresh_started = True
+        _catalog_refresh_task = asyncio.create_task(asyncio.to_thread(_refresh_catalog_safely))
     if config.mode == "simulator":
         await connector.start("simulator")
 
@@ -251,6 +265,11 @@ async def update_config(data: dict[str, Any]) -> dict:
 @app.get("/api/gifts")
 async def gifts(q: str = "") -> list[dict]:
     return list_gifts(q)
+
+@app.post("/api/gifts/refresh")
+async def refresh_gifts() -> dict:
+    count = await asyncio.to_thread(_refresh_catalog_safely)
+    return {"ok": count > 0, "count": count, "gifts": list_gifts()}
 
 @app.get("/api/games")
 async def games() -> list[dict]:

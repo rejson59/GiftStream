@@ -142,7 +142,7 @@ class GiftStreamDesktop:
 
         self.window = webview.create_window(
             "GiftStream",
-            self.base_url,
+            f"{self.base_url}/?desktop=1",
             width=1440,
             height=920,
             min_size=(1024, 700),

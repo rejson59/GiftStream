@@ -74,3 +74,13 @@ def test_prepare_latest_falls_back_to_last_good_install_when_offline(tmp_path, m
     monkeypatch.setattr(updater, "fetch_latest_release", lambda _repo: (_ for _ in ()).throw(UpdateError("offline")))
     tag, exe, updated, _message = prepare_latest("owner/repo", tmp_path)
     assert (tag, exe, updated) == ("v1.0.0", installed, False)
+
+
+def test_next_launcher_start_uses_the_downloaded_app_without_reinstall_or_redownload(tmp_path, monkeypatch):
+    payload = b"MZ" + b"x" * 4096
+    installed = _install_archive(_app_zip(payload), "v2.0.0", tmp_path)
+    monkeypatch.setattr(updater, "fetch_latest_release", lambda _repo: {"tag": "v2.0.0"})
+    monkeypatch.setattr(updater, "_open", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected download")))
+    tag, executable, updated, message = prepare_latest("owner/repo", tmp_path)
+    assert (tag, executable, updated) == ("v2.0.0", installed, False)
+    assert "najnowszą wersję" in message
