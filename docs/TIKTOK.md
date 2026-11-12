@@ -24,5 +24,5 @@ Po połączeniu TikTokLive prosi o katalog prezentów pokoju LIVE. GiftStream za
 
 - Treat event payloads as untrusted input. GiftStream maps known event types to configured actions; it does not execute arbitrary TikTok comments as shell or game-server commands.
 - Keep the API bound to a trusted/local network unless you configure a reverse proxy and authentication.
-- When accepting remote events, set `BRIDGE_WEBHOOK_SECRET` and provide `X-TipStream-Secret`.
+- When accepting remote events, set `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` and provide `X-GiftStream-Secret`.
 - Avoid putting private TikTok account credentials in `.env` or the dashboard; this MVP only needs the public LIVE username for the unofficial connector.

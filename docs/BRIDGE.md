@@ -33,7 +33,7 @@ curl -X POST http://localhost:8000/api/bridge/event \
 
 Supported event `type`: `gift`, `like`, `follow`, `comment`, `join`, `share`, `subscribe`.
 
-For a protected webhook, set `BRIDGE_WEBHOOK_SECRET` in `.env` and send it in the `X-TipStream-Secret` header.
+For a protected webhook, set `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` in `.env` and send it in the `X-GiftStream-Secret` header.
 
 ## 3. UDP (localhost only)
 

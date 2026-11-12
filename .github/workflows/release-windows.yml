@@ -19,7 +19,16 @@ jobs:
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
-            throw "Użyj taga w formacie vX.Y.Z, np. v0.3.0"
+            throw "Użyj taga w formacie vX.Y.Z, np. v0.5.0"
+          }
+
+      - name: Sprawdź wersję aplikacji
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $expected = 'VERSION = "' + $version + '"'
+          if (-not (Select-String -Path app/version.py -SimpleMatch -Pattern $expected)) {
+            throw "Tag wydania i VERSION w app/version.py muszą być zgodne."
           }
 
       - name: Przygotuj Python
@@ -34,11 +43,11 @@ jobs:
       - name: Uruchom testy
         run: python -m pytest -q
 
-      - name: Zbuduj aplikację desktopową
+      - name: Zbuduj pojedynczą aplikację GiftStream
         shell: pwsh
         run: >-
           pyinstaller --noconfirm --clean --onefile --windowed
-          --name TipStreamApp
+          --name GiftStream
           --icon assets/giftstream.ico
           --paths .
           --add-data "web;web"
@@ -57,40 +66,14 @@ jobs:
           --collect-all EulerApiSdk
           app/desktop.py
 
-      - name: Zbuduj mały launcher z updaterem
-        shell: pwsh
-        run: >-
-          pyinstaller --noconfirm --clean --onefile --windowed
-          --name GiftStream
-          --icon assets/giftstream.ico
-          --paths .
-          app/launcher.py
-
-      - name: Przygotuj paczkę aktualizacji i SHA-256
+      - name: Przygotuj plik aplikacji i sumę SHA-256
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release-assets | Out-Null
           Copy-Item dist/GiftStream.exe release-assets/GiftStream.exe
-          # Keep the old launcher asset name so v0.1.0 installations can update.
-          Copy-Item dist/GiftStream.exe release-assets/TipStream.exe
-          Compress-Archive -Path dist/TipStreamApp.exe -DestinationPath release-assets/TipStreamApp-win-x64.zip -CompressionLevel Optimal
-          $hash = (Get-FileHash release-assets/TipStreamApp-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  TipStreamApp-win-x64.zip" | Set-Content -Encoding ascii release-assets/checksums.txt
+          $hash = (Get-FileHash release-assets/GiftStream.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  GiftStream.exe" | Set-Content -Encoding ascii release-assets/checksums.txt
           Get-ChildItem release-assets | Select-Object Name,Length
-
-      - name: Przygotuj instalator GiftStream i WebView2
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile release-assets/MicrosoftEdgeWebview2Setup.exe
-          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $compiler)) {
-            choco install innosetup --yes --no-progress
-          }
-          if (-not (Test-Path $compiler)) { throw "Nie znaleziono kompilatora Inno Setup." }
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          & $compiler "/DAppVersion=$version" "installer/GiftStream.iss"
-          if ($LASTEXITCODE -ne 0) { throw "Kompilacja instalatora nie powiodła się." }
-          Get-Item release-assets/GiftStream-Setup-win-x64.exe | Select-Object Name,Length
 
       - name: Opublikuj wydanie GitHub
         env:
@@ -102,8 +85,5 @@ jobs:
             --repo $env:GITHUB_REPOSITORY `
             --title "GiftStream $tag" `
             --generate-notes `
-            release-assets/GiftStream-Setup-win-x64.exe `
             release-assets/GiftStream.exe `
-            release-assets/TipStream.exe `
-            release-assets/TipStreamApp-win-x64.zip `
             release-assets/checksums.txt
