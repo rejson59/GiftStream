@@ -22,8 +22,8 @@ from app.paths import data_dir, installed_release_tag
 from app.updater import prepare_latest
 
 GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
-UPDATE_CHECK_SECONDS = 60 * 60
-FIRST_UPDATE_CHECK_SECONDS = 90
+UPDATE_CHECK_SECONDS = 30 * 60
+FIRST_UPDATE_CHECK_SECONDS = 15
 
 
 class GiftStreamDesktop:
@@ -75,26 +75,28 @@ class GiftStreamDesktop:
         return bool(self.server.started)
 
     def _update_loop(self) -> None:
-        if self.stop_event.wait(FIRST_UPDATE_CHECK_SECONDS):
-            return
+        next_check = time.monotonic() + FIRST_UPDATE_CHECK_SECONDS
         while not self.stop_event.is_set():
-            try:
-                tag, executable, updated, _message = prepare_latest(GITHUB_REPOSITORY, data_dir())
-                if updated and tag != self.current_tag:
-                    update_state.publish_update(tag, executable)
-            except Exception:
-                # Network trouble must never interrupt the running stream or UI.
-                pass
+            manual_check = update_state.take_check_request()
+            if manual_check or time.monotonic() >= next_check:
+                update_state.begin_check()
+                message = "Nie udało się sprawdzić aktualizacji. Spróbuj ponownie później."
+                try:
+                    tag, executable, updated, message = prepare_latest(GITHUB_REPOSITORY, data_dir())
+                    if updated and tag != self.current_tag:
+                        update_state.publish_update(tag, executable)
+                except Exception as exc:
+                    # Network trouble must never interrupt the running stream or UI.
+                    message = f"Nie udało się sprawdzić aktualizacji: {exc}"
+                finally:
+                    update_state.finish_check(message)
+                next_check = time.monotonic() + UPDATE_CHECK_SECONDS
 
-            next_check = time.monotonic() + UPDATE_CHECK_SECONDS
-            while not self.stop_event.is_set():
-                pending = update_state.take_apply_request()
-                if pending is not None and self._apply_update(pending):
-                    return
-                remaining = next_check - time.monotonic()
-                if remaining <= 0:
-                    break
-                self.stop_event.wait(min(0.5, remaining))
+            pending = update_state.take_apply_request()
+            if pending is not None and self._apply_update(pending):
+                return
+            remaining = max(0.05, next_check - time.monotonic())
+            self.stop_event.wait(min(0.25, remaining))
 
     @staticmethod
     def _ps_quote(value: str | Path) -> str:

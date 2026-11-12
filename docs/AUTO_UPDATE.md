@@ -10,7 +10,7 @@
 
 ## Aktualizacje i dane
 
-Launcher sprawdza wydanie przy każdym uruchomieniu i w razie potrzeby pobiera nową aplikację desktopową do katalogu wersjonowanego w danych użytkownika, po czym uruchamia ją w natywnym oknie GiftStream. Nie trzeba ponownie pobierać instalatora, klikać linku ani reinstalować programu. Sama aplikacja sprawdza też wydania co godzinę i pobiera aktualizację w tle; gotowa wersja uruchomi się automatycznie przy następnym starcie GiftStream z menu Start lub skrótu. Bieżąca transmisja nie jest przerywana ani restartowana w trakcie działania. Presety, integracje i ustawienia pozostają w dotychczasowym katalogu danych.
+Launcher sprawdza wydanie przy każdym uruchomieniu i w razie potrzeby pobiera nową aplikację desktopową do katalogu wersjonowanego w danych użytkownika, po czym uruchamia ją w natywnym oknie GiftStream. Nie trzeba ponownie pobierać instalatora, klikać linku ani reinstalować programu. Sama aplikacja sprawdza też wydania co 30 minut (pierwsze sprawdzenie krótko po uruchomieniu) i udostępnia przycisk **Sprawdź aktualizacje** do ręcznego sprawdzenia. Aktualizacja pobiera się w tle; gotowa wersja uruchomi się automatycznie przy następnym starcie GiftStream z menu Start lub skrótu. Bieżąca transmisja nie jest przerywana ani restartowana w trakcie działania. Presety, integracje i ustawienia pozostają w dotychczasowym katalogu danych.
 
 Dla zgodności z istniejącymi użytkownikami:
 

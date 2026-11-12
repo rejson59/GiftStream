@@ -52,3 +52,5 @@ html{scroll-behavior:smooth}body{font-size:14px;line-height:1.55;-webkit-font-sm
 @media(max-width:560px){.view-tools{width:100%;align-items:stretch}.event-search{min-width:0;flex:1}.view-tools #clear-activity{white-space:nowrap;padding-inline:10px}}
 .avatar{display:grid;place-items:center;flex:none}.top-actions .avatar{margin-left:2px}.button:active,.nav-link:active,.gift-library-card:active{transform:scale(.985)}
 @media(max-width:800px){.page-wrap{width:calc(100% - 36px);max-width:760px}}
+.check-updates-button{white-space:nowrap}.update-spin{display:inline-block;animation:update-spin .8s linear infinite}@keyframes update-spin{to{transform:rotate(360deg)}}
+.top-actions [hidden]{display:none!important}

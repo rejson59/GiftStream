@@ -70,6 +70,25 @@ def test_gift_catalog_refresh_endpoint_returns_latest_catalog(monkeypatch):
     assert len(result["gifts"]) == 100
 
 
+def test_update_check_can_be_requested_and_reports_completion():
+    from app import update_state
+
+    update_state.clear()
+    client = TestClient(main.app)
+    first = client.post("/api/updates/check").json()
+    assert first["ok"] is True
+    assert first["checking"] is True
+    assert first["check_id"] == 1
+    second = client.post("/api/updates/check").json()
+    assert second["check_id"] == first["check_id"]
+    update_state.finish_check("Masz najnowszą wersję.")
+    status = client.get("/api/updates/status").json()
+    assert status["checking"] is False
+    assert status["last_checked"]
+    assert status["last_check_message"] == "Masz najnowszą wersję."
+    update_state.clear()
+
+
 def test_update_ui_can_only_request_a_published_update(tmp_path):
     from app import update_state
 

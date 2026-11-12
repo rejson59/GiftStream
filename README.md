@@ -20,7 +20,7 @@
 
 Panel uruchamia się w natywnym oknie aplikacji z osadzonym WebView2 — nie otwiera osobnej karty przeglądarki. Instalator dostarcza bootstrapper WebView2 i doinstaluje runtime, jeśli go brakuje. Python nie musi być zainstalowany.
 
-Otwarta aplikacja sprawdza aktualizacje co godzinę i pobiera je w tle, nie przerywając transmisji. Gotowa wersja uruchomi się automatycznie przy następnym starcie z menu Start lub skrótu — bez ponownego pobierania instalatora i bez ręcznego przycisku. Presety, ustawienia, katalog giftów i historia są zachowane w `%LOCALAPPDATA%\TipStream`; przy problemie z siecią launcher uruchomi ostatnią poprawnie pobraną wersję.
+Otwarta aplikacja sprawdza aktualizacje co 30 minut (pierwszy raz krótko po starcie) i ma przycisk „Sprawdź aktualizacje”; pobiera je w tle, nie przerywając transmisji. Gotowa wersja uruchomi się automatycznie przy następnym starcie z menu Start lub skrótu — bez ponownego pobierania instalatora. Presety, ustawienia, katalog giftów i historia są zachowane w `%LOCALAPPDATA%\TipStream`; przy problemie z siecią launcher uruchomi ostatnią poprawnie pobraną wersję.
 
 Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z`. Wewnętrzne nazwy paczek `TipStreamApp` i folder `%LOCALAPPDATA%\TipStream` pozostają dla zgodności ze starszymi instalacjami. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
 
