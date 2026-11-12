@@ -1,4 +1,4 @@
-"""Proste okno desktopowe: uruchamia lokalne API i otwiera panel GiftStream."""
+"""Native GiftStream window with an embedded web UI and local FastAPI backend."""
 from __future__ import annotations
 
 import asyncio
@@ -7,82 +7,42 @@ import socket
 import subprocess
 import sys
 import threading
-import tkinter as tk
-import webbrowser
+import time
 from pathlib import Path
 
 import uvicorn
+import webview
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import update_state
 from app.main import app
 from app.paths import data_dir, installed_release_tag
 from app.updater import prepare_latest
 
 GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
 UPDATE_CHECK_SECONDS = 60 * 60
+FIRST_UPDATE_CHECK_SECONDS = 90
 
 
-class TipStreamDesktop:
+class GiftStreamDesktop:
     def __init__(self) -> None:
-        self.root = tk.Tk()
-        self.root.title("GiftStream")
-        self.root.geometry("470x365")
-        self.root.resizable(False, False)
-        self.root.configure(bg="#0b0b0d")
-        self.root.protocol("WM_DELETE_WINDOW", self.stop)
         self.port = self._choose_port(8000)
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.server = uvicorn.Server(uvicorn.Config(
-            app, host="127.0.0.1", port=self.port, log_level="warning",
-            access_log=False, use_colors=False,
+            app,
+            host="127.0.0.1",
+            port=self.port,
+            log_level="warning",
+            access_log=False,
+            use_colors=False,
         ))
         self.server_thread = threading.Thread(target=self._serve, name="GiftStream API", daemon=True)
-        self.server_error: str | None = None
+        self.update_thread = threading.Thread(target=self._update_loop, name="GiftStream updater", daemon=True)
+        self.stop_event = threading.Event()
+        self.window = None
         self.current_tag = installed_release_tag()
-        self.pending_executable: Path | None = None
-        self._update_check_running = False
-
-        outer = tk.Frame(self.root, bg="#0b0b0d", padx=27, pady=22)
-        outer.pack(fill="both", expand=True)
-        tk.Label(outer, text="giftstream", bg="#0b0b0d", fg="#f2f1ef",
-                 font=("Segoe UI", 23, "bold")).pack(anchor="w")
-        tk.Label(outer, text="PREZENTY Z LIVE STERUJĄ GRĄ", bg="#0b0b0d", fg="#a0a0a7",
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 15))
-
-        self.status = tk.StringVar(value="Uruchamiam lokalny serwer…")
-        tk.Label(outer, textvariable=self.status, bg="#151518", fg="#d8d8dc",
-                 font=("Segoe UI", 10), padx=13, pady=11, anchor="w", justify="left",
-                 wraplength=382).pack(fill="x")
-
-        actions = tk.Frame(outer, bg="#0b0b0d")
-        actions.pack(fill="x", pady=(16, 0))
-        self._button(actions, "Otwórz panel", self.open_dashboard, primary=True).pack(fill="x", pady=(0, 7))
-        row = tk.Frame(actions, bg="#0b0b0d")
-        row.pack(fill="x")
-        self._button(row, "Otwórz grę demo", lambda: self.open_path("/game")).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self._button(row, "Adres nakładki OBS", self.copy_overlay).pack(side="left", fill="x", expand=True, padx=(4, 0))
-        self.update_button = self._button(actions, "Pobierz i zastosuj aktualizację", self.apply_update, primary=True)
-        self.update_button.pack(fill="x", pady=(8, 0))
-        self.update_button.pack_forget()
-        tk.Label(outer, text=f"Lokalnie: {self.base_url}  ·  wersja {self.current_tag}",
-                 bg="#0b0b0d", fg="#66666e", font=("Consolas", 8)).pack(anchor="w", pady=(15, 0))
-
-        self.server_thread.start()
-        self.root.after(250, self._poll_server)
-        # Po starcie sprawdza wydania okresowo; pobieranie nie zatrzymuje LIVE.
-        self.root.after(90_000, self._check_for_updates)
-
-    @staticmethod
-    def _button(parent: tk.Widget, text: str, command, primary: bool = False) -> tk.Button:
-        return tk.Button(
-            parent, text=text, command=command, relief="flat", padx=12, pady=9,
-            bg="#c3f53c" if primary else "#1d1d21",
-            fg="#11130b" if primary else "#e5e5e8",
-            activebackground="#d9ff7a" if primary else "#29292e",
-            font=("Segoe UI", 9, "bold"), cursor="hand2",
-        )
 
     @staticmethod
     def _choose_port(preferred: int) -> int:
@@ -100,95 +60,121 @@ class TipStreamDesktop:
     def _serve(self) -> None:
         try:
             asyncio.run(self.server.serve())
-        except Exception as exc:
-            self.server_error = str(exc)
-
-    def _poll_server(self) -> None:
-        if self.server.started:
-            self.status.set(f"● GiftStream działa. Symulator jest gotowy.\n{self.base_url}")
-            # Otwórz dashboard automatycznie po starcie, bez blokowania aplikacji.
-            self.root.after(450, self.open_dashboard)
-            return
-        if not self.server_thread.is_alive():
-            self.status.set(f"Nie udało się uruchomić serwera: {self.server_error or 'nieznany błąd'}")
-            return
-        self.root.after(250, self._poll_server)
-
-    def open_dashboard(self) -> None:
-        webbrowser.open_new_tab(self.base_url)
-
-    def open_path(self, path: str) -> None:
-        webbrowser.open_new_tab(f"{self.base_url}{path}")
-
-    def copy_overlay(self) -> None:
-        url = f"{self.base_url}/overlay?template=grid"
-        self.root.clipboard_clear()
-        self.root.clipboard_append(url)
-        self.status.set(f"Skopiowano adres nakładki OBS:\n{url}")
-
-    def _check_for_updates(self) -> None:
-        if self._update_check_running:
-            self.root.after(UPDATE_CHECK_SECONDS * 1000, self._check_for_updates)
-            return
-        self._update_check_running = True
-        threading.Thread(target=self._update_worker, name="GiftStream update check", daemon=True).start()
-
-    def _update_worker(self) -> None:
-        try:
-            tag, executable, updated, message = prepare_latest(GITHUB_REPOSITORY, data_dir())
-            if updated and tag != self.current_tag:
-                self.root.after(0, lambda: self._update_ready(tag, executable))
         except Exception:
-            # Utrata sieci podczas transmisji nie może zatrzymać działającej gry.
-            pass
-        finally:
-            self._update_check_running = False
+            self.server.should_exit = True
+
+    def _wait_for_server(self) -> bool:
+        self.server_thread.start()
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not self.stop_event.is_set():
+            if self.server.started:
+                return True
+            if not self.server_thread.is_alive():
+                return False
+            self.stop_event.wait(0.1)
+        return bool(self.server.started)
+
+    def _update_loop(self) -> None:
+        if self.stop_event.wait(FIRST_UPDATE_CHECK_SECONDS):
+            return
+        while not self.stop_event.is_set():
             try:
-                self.root.after(UPDATE_CHECK_SECONDS * 1000, self._check_for_updates)
-            except tk.TclError:
+                tag, executable, updated, _message = prepare_latest(GITHUB_REPOSITORY, data_dir())
+                if updated and tag != self.current_tag:
+                    update_state.publish_update(tag, executable)
+            except Exception:
+                # Network trouble must never interrupt the running stream or UI.
                 pass
 
-    def _update_ready(self, tag: str, executable: Path) -> None:
-        self.pending_executable = executable
-        self.status.set(f"Pobrano aktualizację GiftStream {tag}. Zastosuj ją po zakończeniu transmisji.")
-        self.update_button.pack(fill="x", pady=(8, 0))
+            next_check = time.monotonic() + UPDATE_CHECK_SECONDS
+            while not self.stop_event.is_set():
+                pending = update_state.take_apply_request()
+                if pending is not None and self._apply_update(pending):
+                    return
+                remaining = next_check - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.stop_event.wait(min(0.5, remaining))
 
-    def apply_update(self) -> None:
-        if not self.pending_executable:
-            return
+    @staticmethod
+    def _ps_quote(value: str | Path) -> str:
+        return "'" + str(value).replace("'", "''") + "'"
+
+    def _apply_update(self, executable: Path) -> bool:
         if os.name != "nt":
-            self.status.set("Aktualizacja zostanie uruchomiona przy następnym starcie launchera.")
-            return
+            return False
         script_path = data_dir() / "restart_giftstream.ps1"
-        ps_quote = lambda value: "'" + str(value).replace("'", "''") + "'"
         script = (
             f"$oldPid = {os.getpid()}\n"
             f"while (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}\n"
-            f"Start-Process -FilePath {ps_quote(self.pending_executable)} -WorkingDirectory {ps_quote(data_dir())}\n"
-            f"Remove-Item -LiteralPath {ps_quote(script_path)} -Force -ErrorAction SilentlyContinue\n"
+            f"Start-Process -FilePath {self._ps_quote(executable)} -WorkingDirectory {self._ps_quote(data_dir())}\n"
+            f"Remove-Item -LiteralPath {self._ps_quote(script_path)} -Force -ErrorAction SilentlyContinue\n"
         )
         try:
             script_path.write_text(script, encoding="utf-8")
             flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-            subprocess.Popen(["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden",
-                              "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
-                             creationflags=flags, close_fds=True)
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+                creationflags=flags,
+                close_fds=True,
+            )
             self.stop()
-        except OSError as exc:
-            self.status.set(f"Nie udało się przygotować aktualizacji: {exc}")
+            return True
+        except OSError:
+            # Keep the downloaded update available so the user can retry.
+            return False
 
     def stop(self) -> None:
-        if self.server.started:
-            self.server.should_exit = True
-        self.root.destroy()
+        if self.stop_event.is_set():
+            return
+        self.stop_event.set()
+        self.server.should_exit = True
+        if self.window is not None:
+            try:
+                self.window.destroy()
+            except Exception:
+                pass
 
     def run(self) -> None:
-        self.root.mainloop()
+        data_dir()
+        if not self._wait_for_server():
+            raise RuntimeError("Nie udało się uruchomić lokalnego serwera GiftStream.")
+
+        self.window = webview.create_window(
+            "GiftStream",
+            self.base_url,
+            width=1440,
+            height=920,
+            min_size=(1024, 700),
+            background_color="#0b0b0d",
+            text_select=True,
+        )
+        self.window.events.closed += self.stop
+        self.update_thread.start()
+        try:
+            # Windows uses the native Edge WebView2 control; no external browser tab is opened.
+            webview.start(gui="edgechromium", debug=False, http_server=False)
+        except Exception as exc:
+            if os.name == "nt":
+                try:
+                    import ctypes
+                    ctypes.windll.user32.MessageBoxW(
+                        0,
+                        f"Nie udało się uruchomić okna GiftStream. Zainstaluj aplikację instalatorem, który przygotowuje Microsoft Edge WebView2.\n\n{exc}",
+                        "GiftStream",
+                        0x10,
+                    )
+                except Exception:
+                    pass
+            raise
+        finally:
+            self.stop()
+            self.server_thread.join(timeout=5)
+            update_state.clear()
 
 
 def main() -> None:
-    data_dir()
-    TipStreamDesktop().run()
+    GiftStreamDesktop().run()
 
 
 if __name__ == "__main__":

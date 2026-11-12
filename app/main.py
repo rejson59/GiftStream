@@ -27,6 +27,7 @@ from .minecraft import ServerTapClient, validate_base_url
 from .models import AppConfig, GameAction, Preset, TikTokEvent
 from .paths import bundle_root, data_dir, installed_release_tag
 from .tiktok_connector import TikTokConnector
+from . import update_state
 
 load_dotenv()
 ROOT = bundle_root()
@@ -36,7 +37,7 @@ CONFIG_PATH = DATA / "config.json"
 GITHUB_RELEASES_URL = "https://github.com/rejson59/GiftStream/releases"
 _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
-app = FastAPI(title="GiftStream", version="0.2.0",
+app = FastAPI(title="GiftStream", version="0.3.0",
               description="Prezenty z TikTok LIVE sterują grą")
 connector: TikTokConnector
 config = AppConfig()
@@ -166,6 +167,16 @@ app.mount("/static", StaticFiles(directory=WEB), name="static")
 async def health() -> dict:
     return {"ok": True, "app": "GiftStream", "version": installed_release_tag()}
 
+@app.get("/api/updates/status")
+async def updates_status() -> dict:
+    return update_state.status()
+
+@app.post("/api/updates/apply")
+async def apply_downloaded_update() -> dict:
+    if not update_state.request_apply():
+        raise HTTPException(409, "Nie ma pobranej aktualizacji do zastosowania.")
+    return {"ok": True, "message": "GiftStream uruchomi się ponownie z pobraną aktualizacją."}
+
 @app.get("/api/download-info")
 async def download_info() -> dict:
     """Returns the latest Windows launcher URL when a release has been published."""
@@ -188,12 +199,15 @@ async def download_info() -> dict:
                 return fallback
             raise
         assets = {a.get("name"): a for a in release.get("assets", [])}
-        asset = assets.get("GiftStream.exe") or assets.get("TipStream.exe")
+        installer = assets.get("GiftStream-Setup-win-x64.exe")
+        asset = installer or assets.get("GiftStream.exe") or assets.get("TipStream.exe")
         asset_url = str((asset or {}).get("browser_download_url", ""))
         if asset and asset_url.startswith("https://github.com/"):
-            return {"available": True, "url": asset_url, "releases_url": GITHUB_RELEASES_URL,
+            download_kind = "instalator" if installer else "wersję przenośną"
+            return {"available": True, "kind": "installer" if installer else "portable",
+                    "url": asset_url, "releases_url": GITHUB_RELEASES_URL,
                     "version": release.get("tag_name", ""),
-                    "message": f"Pobierz GiftStream {release.get('tag_name', '')} dla Windows."}
+                    "message": f"Pobierz {download_kind} GiftStream {release.get('tag_name', '')} dla Windows."}
         return fallback
 
     try:

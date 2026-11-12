@@ -1,25 +1,33 @@
-# GiftStream: Windows launcher i aktualizacje
+# GiftStream dla Windows: aplikacja, instalator i aktualizacje
 
-## Model dystrybucji
+## Instalacja i uruchamianie
 
-- `GiftStream.exe` jest nowym launcherem użytkownika. Przy każdym uruchomieniu sprawdza najnowsze publiczne wydanie w repozytorium GitHub `rejson59/GiftStream`.
-- `TipStream.exe` jest dołączany jako zgodnościowy alias, aby istniejące instalacje GiftStream/TipStream nadal mogły pobierać aktualizacje.
-- `TipStreamApp-win-x64.zip` zawiera desktopową aplikację (`TipStreamApp.exe`), lokalny serwer i zasoby panelu. Nazwy wewnętrznej paczki pozostają stabilne dla launchera v0.1.0.
-- `checksums.txt` zawiera SHA-256 paczki aplikacji. Launcher pobiera assety przez HTTPS, porównuje sumę i odrzuca uszkodzoną lub niezgodną paczkę.
-- Wersje i dane użytkownika pozostają w `%LOCALAPPDATA%\TipStream`. Zachowujemy ten dotychczasowy katalog, żeby zmiana nazwy aplikacji nie zgubiła istniejących presetów, ustawień ani historii.
+- `GiftStream-Setup-win-x64.exe` instaluje launcher per-user do `%LOCALAPPDATA%\Programs\GiftStream`, tworzy pozycję GiftStream w menu Start i na liście aplikacji Windows. Opcjonalny skrót na pulpicie można zaznaczyć w instalatorze.
+- Instalator uruchamia Microsoft Edge WebView2 Evergreen Bootstrapper. WebView2 zapewnia natywne okno z osadzonym panelem; nie otwieramy osobnej przeglądarki. Wymagane jest połączenie z internetem, jeśli runtime WebView2 nie jest jeszcze zainstalowany.
+- `GiftStream.exe` jest dostępny osobno jako przenośny launcher. `TipStream.exe` pozostaje zgodnościowym aliasem.
+- Aby dodać aplikację do paska zadań, uruchom GiftStream z menu Start, kliknij prawym przyciskiem jego ikonę na pasku i wybierz **Przypnij do paska zadań**. Windows nie udostępnia wspieranego sposobu, by instalator przypinał aplikację automatycznie.
+- Standardowe odinstalowanie usuwa pliki programu i skróty, ale nie kasuje danych użytkownika.
 
-Launcher sprawdza wydanie przy każdym uruchomieniu. Otwarta aplikacja ponawia sprawdzanie co godzinę i pobiera aktualizację w tle, bez przerywania transmisji. Po pobraniu pokaże przycisk zastosowania aktualizacji; można kliknąć go po LIVE. Do uruchamiania aplikacji używaj launchera `GiftStream.exe` (stary `TipStream.exe` nadal jest wspierany).
+## Aktualizacje i dane
 
-## Publikacja
+Launcher sprawdza wydanie przy każdym uruchomieniu, pobiera właściwą aplikację desktopową oraz uruchamia ją w natywnym oknie GiftStream. Sama aplikacja ponawia sprawdzanie co godzinę. Aktualizacja pobiera się w tle; po zakończeniu transmisji użyj banera **Zastosuj i uruchom ponownie** w panelu. Aktualizacja zamknie aktualne okno, uruchomi nową wersję i nie nadpisze presetów ani ustawień.
 
-Workflow `.github/workflows/release-windows.yml` uruchamia się po wypchnięciu taga semver, np. `v0.2.0`. Na runnerze Windows uruchamia testy, buduje launcher i aplikację PyInstallerem, a następnie publikuje release z plikami:
+Dla zgodności z istniejącymi użytkownikami:
 
-- `GiftStream.exe` — nowa nazwa launchera do pobrania,
-- `TipStream.exe` — zgodnościowy alias dla istniejących użytkowników,
-- `TipStreamApp-win-x64.zip` i `checksums.txt` — format aktualizacji zachowujący zgodność z launcherem v0.1.0.
+- wersje i dane użytkownika pozostają w `%LOCALAPPDATA%\TipStream`,
+- `TipStream.exe` jest nadal publikowany jako alias,
+- wewnętrzny pakiet aktualizacji zachowuje nazwy `TipStreamApp.exe` i `TipStreamApp-win-x64.zip`,
+- poprzedni adres repozytorium `rejson59/TipStream` przekierowuje do `rejson59/GiftStream`,
+- identyfikatory `TIPSTREAM_*` i nagłówek webhooka `X-TipStream-Secret` nie zmieniają się.
 
-Stary adres repozytorium `rejson59/TipStream` jest przekierowywany do `rejson59/GiftStream`. Identyfikatory API `TIPSTREAM_*` / `X-TipStream-Secret` pozostają niezmienione, aby starsze instalacje i integracje nadal działały. Folder `%LOCALAPPDATA%\TipStream` jest celowo zachowany.
+## Zawartość wydania
 
-## Bezpieczeństwo i ograniczenia
+Workflow `.github/workflows/release-windows.yml` uruchamia się po tagu semver, np. `v0.3.0`. Na Windows uruchamia testy i buduje PyInstallerem aplikację, launcher oraz Inno Setup installer. Release zawiera:
 
-SHA-256 wykrywa uszkodzenie lub niepełne pobranie, ale nie zastępuje podpisu kodu. Aktualizator ufa wydaniom opublikowanym w repozytorium projektu przez HTTPS. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może wyświetlać ostrzeżenie.
+- `GiftStream-Setup-win-x64.exe` — zalecana instalacja z menu Start i opcjonalnym skrótem na pulpicie,
+- `GiftStream.exe` — przenośny launcher,
+- `TipStream.exe` — zgodnościowy alias dla starszych użytkowników,
+- `TipStreamApp-win-x64.zip` i `checksums.txt` — wstecznie zgodny format aktualizacji,
+Instalator zawiera Microsoft Edge WebView2 bootstrapper, niezbędny do przygotowania runtime przy pierwszej instalacji.
+
+SHA-256 wykrywa uszkodzenie albo niepełne pobranie, ale nie zastępuje podpisu kodu. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może wyświetlać ostrzeżenie.
