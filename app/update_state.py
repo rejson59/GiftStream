@@ -21,7 +21,7 @@ def publish_update(tag: str, executable: Path) -> None:
         _state.update({
             "available": True,
             "tag": tag,
-            "message": f"GiftStream {tag} jest gotowy do zastosowania.",
+            "message": f"GiftStream {tag} pobrano. Aktualizacja uruchomi się automatycznie przy następnym starcie aplikacji.",
         })
 
 

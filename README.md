@@ -11,7 +11,7 @@
 - Gra demo „Zombie: przetrwanie” i nakładka OBS.
 - Integracja Minecraft **Paper / Spigot / Bukkit przez ServerTap**. Obsługuje ograniczony zestaw komend z allow-listy; konfiguracja w panelu Integracje.
 - Katalog pomysłów na interaktywne tryby: Minecraft, 7 Days to Die, GTA V offline, Raft, Valheim, Roblox.
-- Biblioteka giftów: wartości przykładowe są oznaczone jako próbki; prawdziwe ID, ceny i adresy oryginalnych grafik pobierane są z metadanych giftów odebranych podczas LIVE. GiftStream nie kopiuje ani nie hostuje grafik TikToka.
+- Biblioteka do 100 popularnych giftów: katalog TikToka i oryginalne grafiki z jego CDN pobierane są automatycznie bez logowania i bez połączenia transmisji. GiftStream zapisuje metadane i adresy lokalnie, nie kopiuje ani nie hostuje grafik.
 - Lokalne pliki JSON; konto ani baza danych nie są wymagane do testów.
 
 ## Aplikacja Windows i automatyczne aktualizacje
@@ -20,7 +20,7 @@
 
 Panel uruchamia się w natywnym oknie aplikacji z osadzonym WebView2 — nie otwiera osobnej karty przeglądarki. Instalator dostarcza bootstrapper WebView2 i doinstaluje runtime, jeśli go brakuje. Python nie musi być zainstalowany.
 
-Otwarta aplikacja sprawdza aktualizacje co godzinę i pobiera je w tle, nie przerywając transmisji. Po pobraniu pokaże przycisk do zastosowania aktualizacji w panelu. Presety, ustawienia, gift-katalog i historia są zachowane w `%LOCALAPPDATA%\TipStream` — dotychczasowej ścieżce zgodności, więc wcześniejsze dane TipStream pozostają dostępne. Przy problemie z siecią launcher uruchomi ostatnią poprawnie pobraną wersję.
+Otwarta aplikacja sprawdza aktualizacje co godzinę i pobiera je w tle, nie przerywając transmisji. Gotowa wersja uruchomi się automatycznie przy następnym starcie z menu Start lub skrótu — bez ponownego pobierania instalatora i bez ręcznego przycisku. Presety, ustawienia, katalog giftów i historia są zachowane w `%LOCALAPPDATA%\TipStream`; przy problemie z siecią launcher uruchomi ostatnią poprawnie pobraną wersję.
 
 Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z`. Wewnętrzne nazwy paczek `TipStreamApp` i folder `%LOCALAPPDATA%\TipStream` pozostają dla zgodności ze starszymi instalacjami. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
 

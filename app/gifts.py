@@ -7,6 +7,7 @@ aby można go użyć na nakładce OBS.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -19,6 +20,15 @@ LABEL_PL = {"Rose":"Róża", "Rosa":"Róża", "Dragon":"Smok", "Lion":"Lew",
             "Doughnut":"Donut", "Donut":"Donut", "Ice Cream":"Lody",
             "Finger Heart":"Serduszko z palców", "Sunglasses":"Okulary",
             "Money Gun":"Pistolet na pieniądze", "TikTok Universe":"Wszechświat TikToka"}
+
+# First entries are familiar, frequently used gifts. The rest of the 100-card
+# showcase is filled from TikTok's current public catalog, favoring accessible gifts.
+POPULAR_GIFT_NAMES = (
+    "rose", "tiktok", "finger heart", "donut", "ice cream", "gg", "perfume",
+    "heart me", "love you", "cap", "sunglasses", "paper crane", "hand hearts",
+    "galaxy", "lion", "universe", "money gun", "swan", "fireworks", "dragon",
+)
+POPULAR_GIFT_LIMIT = 100
 
 
 def label_pl(name: str) -> str:
@@ -36,6 +46,8 @@ def _load_cache() -> dict[str, dict[str, Any]]:
 
 
 _seen = _load_cache()
+_cache_lock = threading.RLock()
+_refresh_lock = threading.Lock()
 
 
 def _save() -> None:
@@ -62,20 +74,21 @@ def record_event(event: TikTokEvent) -> None:
     if event.type != "gift" or not event.gift_name:
         return
     key = str(event.gift_id) if event.gift_id is not None else f"name:{event.gift_name.casefold()}"
-    old = _seen.get(key, {})
-    entry = {**old,
-             "id": event.gift_id,
-             "name": event.gift_name,
-             "label_pl": label_pl(event.gift_name),
-             "diamonds": event.diamonds or old.get("diamonds", 0),
-             "image_url": _safe_tiktok_image(event.gift_image_url) or old.get("image_url"),
-             "source": "tiktok-live" if event.source in {"tiktok", "managed"} else event.source,
-             "streakable": old.get("streakable", False)}
-    _seen[key] = entry
-    _save()
+    with _cache_lock:
+        old = _seen.get(key, {})
+        entry = {**old,
+                 "id": event.gift_id,
+                 "name": event.gift_name,
+                 "label_pl": label_pl(event.gift_name),
+                 "diamonds": event.diamonds or old.get("diamonds", 0),
+                 "image_url": _safe_tiktok_image(event.gift_image_url) or old.get("image_url"),
+                 "source": "tiktok-live" if event.source in {"tiktok", "managed"} else event.source,
+                 "streakable": old.get("streakable", False)}
+        _seen[key] = entry
+        _save()
 
 
-def record_metadata(gift: Any) -> None:
+def record_metadata(gift: Any, source: str = "tiktok-live", save: bool = True) -> None:
     """Cache metadata from TikTokLive's protobuf objects or gift-list dictionaries."""
     if gift is None:
         return
@@ -104,18 +117,91 @@ def record_metadata(gift: Any) -> None:
     except Exception:
         streakable = False
     key = str(gift_id) if gift_id is not None else f"name:{str(name).casefold()}"
-    _seen[key] = {"id": gift_id, "name": str(name), "label_pl": label_pl(str(name)),
-                  "diamonds": diamonds, "image_url": image_url,
-                  "source": "tiktok-live", "streakable": streakable}
-    _save()
+    with _cache_lock:
+        previous = _seen.get(key, {})
+        _seen[key] = {"id": gift_id, "name": str(name), "label_pl": label_pl(str(name)),
+                      "diamonds": diamonds, "image_url": image_url or previous.get("image_url"),
+                      "source": source, "streakable": streakable}
+        if save:
+            _save()
+
+
+def _popular_rank(gift: Any) -> tuple[int, int, str]:
+    name = str(gift.get("name", "")).casefold()
+    rank = next((i for i, candidate in enumerate(POPULAR_GIFT_NAMES) if candidate in name), len(POPULAR_GIFT_NAMES))
+    try:
+        diamonds = int(gift.get("diamonds") or 0)
+    except (TypeError, ValueError):
+        diamonds = 0
+    return rank, diamonds, name
+
+
+def record_catalog(entries: Any) -> int:
+    """Cache up to 100 current TikTok gifts that include verified CDN artwork."""
+    if isinstance(entries, dict):
+        entries = entries.get("gifts", [])
+    if not isinstance(entries, (list, tuple)):
+        return 0
+    candidates: list[tuple[tuple[int, int, str], Any]] = []
+    for gift in entries:
+        if not isinstance(gift, dict):
+            continue
+        image = gift.get("image") or gift.get("icon") or {}
+        urls = image.get("url_list", image.get("urlList", [])) if isinstance(image, dict) else []
+        if not any(_safe_tiktok_image(url) for url in urls if isinstance(url, str)):
+            continue
+        name = gift.get("name") or gift.get("gift_name")
+        if not name:
+            continue
+        try:
+            diamonds = int(gift.get("diamond_count", gift.get("diamondCount", 0)) or 0)
+        except (TypeError, ValueError):
+            diamonds = 0
+        candidates.append(((0, diamonds, str(name).casefold()), gift))
+    # Put known crowd favorites first, then fill with lower-price catalog entries.
+    candidates.sort(key=lambda pair: _popular_rank({"name": pair[1].get("name", ""),
+                                                    "diamonds": pair[1].get("diamond_count", 0)}))
+    selected = candidates[:POPULAR_GIFT_LIMIT]
+    if not selected:
+        return 0
+    with _cache_lock:
+        for key in [key for key, value in _seen.items() if value.get("source") == "tiktok-catalog"]:
+            _seen.pop(key, None)
+        for _rank, gift in selected:
+            record_metadata(gift, source="tiktok-catalog", save=False)
+        _save()
+    return len(selected)
+
+
+def refresh_tiktok_catalog() -> int:
+    """Fetch TikTok's public gift list (no room connection or credentials needed)."""
+    import asyncio
+    from TikTokLive import TikTokLiveClient  # type: ignore
+
+    async def fetch() -> int:
+        client = TikTokLiveClient(unique_id="@giftstream_catalog")
+        try:
+            result = await client.web.fetch_gift_list()
+            return record_catalog(result)
+        finally:
+            close = getattr(client.web, "close", None)
+            if close is not None:
+                await close()
+
+    with _refresh_lock:
+        return asyncio.run(fetch())
 
 
 def list_gifts(query: str = "") -> list[dict[str, Any]]:
     """Combine examples with observed gift data; observed IDs win."""
     merged: dict[str, dict[str, Any]] = {}
-    for gift in GIFT_CATALOG:
-        merged[f"name:{gift['name'].casefold()}"] = dict(gift)
-    for key, gift in _seen.items():
+    with _cache_lock:
+        seen = {key: dict(gift) for key, gift in _seen.items()}
+    has_real_catalog = sum(1 for gift in seen.values() if gift.get("source") == "tiktok-catalog" and gift.get("image_url")) >= 80
+    if not has_real_catalog:
+        for gift in GIFT_CATALOG:
+            merged[f"name:{gift['name'].casefold()}"] = dict(gift)
+    for key, gift in seen.items():
         gift = {**gift, "label_pl": label_pl(str(gift.get("name", "")))}
         merged[key] = dict(gift)
         # Same name variant/sample should pick up latest real ID, image and price.

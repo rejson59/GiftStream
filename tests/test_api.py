@@ -61,6 +61,15 @@ def test_download_info_prefers_installer_then_new_and_legacy_launchers(monkeypat
     main._DOWNLOAD_INFO_CACHE.update(original_cache)
 
 
+def test_gift_catalog_refresh_endpoint_returns_latest_catalog(monkeypatch):
+    monkeypatch.setattr(main, "_refresh_catalog_safely", lambda: 100)
+    monkeypatch.setattr(main, "list_gifts", lambda _query="": [{"id": i} for i in range(100)])
+    result = TestClient(main.app).post("/api/gifts/refresh").json()
+    assert result["ok"] is True
+    assert result["count"] == 100
+    assert len(result["gifts"]) == 100
+
+
 def test_update_ui_can_only_request_a_published_update(tmp_path):
     from app import update_state
 
@@ -75,6 +84,7 @@ def test_update_ui_can_only_request_a_published_update(tmp_path):
     assert status["available"] is True
     assert status["tag"] == "v0.3.0"
     assert "GiftStream" in status["message"]
+    assert "automatycznie" in status["message"]
     assert client.post("/api/updates/apply").json()["ok"] is True
     assert update_state.take_apply_request() == executable
     update_state.clear()
