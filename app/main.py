@@ -37,7 +37,7 @@ CONFIG_PATH = DATA / "config.json"
 GITHUB_RELEASES_URL = "https://github.com/rejson59/GiftStream/releases"
 _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
-app = FastAPI(title="GiftStream", version="0.4.1",
+app = FastAPI(title="GiftStream", version="0.4.2",
               description="Prezenty z TikTok LIVE sterują grą")
 connector: TikTokConnector
 config = AppConfig()
@@ -184,6 +184,13 @@ async def health() -> dict:
 @app.get("/api/updates/status")
 async def updates_status() -> dict:
     return update_state.status()
+
+@app.post("/api/updates/check")
+async def check_for_updates() -> dict:
+    queued = update_state.request_check()
+    status = update_state.status()
+    return {"ok": True, "checking": True, "check_id": status["check_id"],
+            "message": "Sprawdzanie aktualizacji rozpoczęte." if queued else "Sprawdzanie aktualizacji jest już w toku."}
 
 @app.post("/api/updates/apply")
 async def apply_downloaded_update() -> dict:
