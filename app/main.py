@@ -37,7 +37,7 @@ CONFIG_PATH = DATA / "config.json"
 GITHUB_RELEASES_URL = "https://github.com/rejson59/GiftStream/releases"
 _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
-app = FastAPI(title="GiftStream", version="0.4.0",
+app = FastAPI(title="GiftStream", version="0.4.1",
               description="Prezenty z TikTok LIVE sterują grą")
 connector: TikTokConnector
 config = AppConfig()
