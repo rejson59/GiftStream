@@ -19,7 +19,7 @@ jobs:
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
-            throw "Użyj taga w formacie vX.Y.Z, np. v0.2.0"
+            throw "Użyj taga w formacie vX.Y.Z, np. v0.3.0"
           }
 
       - name: Przygotuj Python
@@ -39,9 +39,18 @@ jobs:
         run: >-
           pyinstaller --noconfirm --clean --onefile --windowed
           --name TipStreamApp
+          --icon assets/giftstream.ico
           --paths .
           --add-data "web;web"
           --add-data "docs;docs"
+          --collect-all webview
+          --collect-all proxy_tools
+          --collect-all bottle
+          --collect-all pythonnet
+          --collect-all clr_loader
+          --hidden-import webview.platforms.edgechromium
+          --hidden-import webview.platforms.winforms
+          --hidden-import clr
           --collect-all TikTokLive
           --collect-all TikTokLiveProto
           --collect-all websockets_proxy
@@ -53,6 +62,7 @@ jobs:
         run: >-
           pyinstaller --noconfirm --clean --onefile --windowed
           --name GiftStream
+          --icon assets/giftstream.ico
           --paths .
           app/launcher.py
 
@@ -68,6 +78,20 @@ jobs:
           "$hash  TipStreamApp-win-x64.zip" | Set-Content -Encoding ascii release-assets/checksums.txt
           Get-ChildItem release-assets | Select-Object Name,Length
 
+      - name: Przygotuj instalator GiftStream i WebView2
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile release-assets/MicrosoftEdgeWebview2Setup.exe
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --yes --no-progress
+          }
+          if (-not (Test-Path $compiler)) { throw "Nie znaleziono kompilatora Inno Setup." }
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          & $compiler "/DAppVersion=$version" "installer/GiftStream.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Kompilacja instalatora nie powiodła się." }
+          Get-Item release-assets/GiftStream-Setup-win-x64.exe | Select-Object Name,Length
+
       - name: Opublikuj wydanie GitHub
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,6 +102,7 @@ jobs:
             --repo $env:GITHUB_REPOSITORY `
             --title "GiftStream $tag" `
             --generate-notes `
+            release-assets/GiftStream-Setup-win-x64.exe `
             release-assets/GiftStream.exe `
             release-assets/TipStream.exe `
             release-assets/TipStreamApp-win-x64.zip `
