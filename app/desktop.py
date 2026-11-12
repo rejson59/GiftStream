@@ -1,4 +1,4 @@
-"""Proste okno desktopowe: uruchamia lokalne API i otwiera panel TipStream."""
+"""Proste okno desktopowe: uruchamia lokalne API i otwiera panel GiftStream."""
 from __future__ import annotations
 
 import asyncio
@@ -20,14 +20,14 @@ from app.main import app
 from app.paths import data_dir, installed_release_tag
 from app.updater import prepare_latest
 
-GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/TipStream")
+GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
 UPDATE_CHECK_SECONDS = 60 * 60
 
 
 class TipStreamDesktop:
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("TipStream")
+        self.root.title("GiftStream")
         self.root.geometry("470x365")
         self.root.resizable(False, False)
         self.root.configure(bg="#0b0b0d")
@@ -38,7 +38,7 @@ class TipStreamDesktop:
             app, host="127.0.0.1", port=self.port, log_level="warning",
             access_log=False, use_colors=False,
         ))
-        self.server_thread = threading.Thread(target=self._serve, name="TipStream API", daemon=True)
+        self.server_thread = threading.Thread(target=self._serve, name="GiftStream API", daemon=True)
         self.server_error: str | None = None
         self.current_tag = installed_release_tag()
         self.pending_executable: Path | None = None
@@ -46,7 +46,7 @@ class TipStreamDesktop:
 
         outer = tk.Frame(self.root, bg="#0b0b0d", padx=27, pady=22)
         outer.pack(fill="both", expand=True)
-        tk.Label(outer, text="tipstream", bg="#0b0b0d", fg="#f2f1ef",
+        tk.Label(outer, text="giftstream", bg="#0b0b0d", fg="#f2f1ef",
                  font=("Segoe UI", 23, "bold")).pack(anchor="w")
         tk.Label(outer, text="PREZENTY Z LIVE STERUJĄ GRĄ", bg="#0b0b0d", fg="#a0a0a7",
                  font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 15))
@@ -105,7 +105,7 @@ class TipStreamDesktop:
 
     def _poll_server(self) -> None:
         if self.server.started:
-            self.status.set(f"● TipStream działa. Symulator jest gotowy.\n{self.base_url}")
+            self.status.set(f"● GiftStream działa. Symulator jest gotowy.\n{self.base_url}")
             # Otwórz dashboard automatycznie po starcie, bez blokowania aplikacji.
             self.root.after(450, self.open_dashboard)
             return
@@ -131,7 +131,7 @@ class TipStreamDesktop:
             self.root.after(UPDATE_CHECK_SECONDS * 1000, self._check_for_updates)
             return
         self._update_check_running = True
-        threading.Thread(target=self._update_worker, name="TipStream update check", daemon=True).start()
+        threading.Thread(target=self._update_worker, name="GiftStream update check", daemon=True).start()
 
     def _update_worker(self) -> None:
         try:
@@ -150,7 +150,7 @@ class TipStreamDesktop:
 
     def _update_ready(self, tag: str, executable: Path) -> None:
         self.pending_executable = executable
-        self.status.set(f"Pobrano aktualizację TipStream {tag}. Zastosuj ją po zakończeniu transmisji.")
+        self.status.set(f"Pobrano aktualizację GiftStream {tag}. Zastosuj ją po zakończeniu transmisji.")
         self.update_button.pack(fill="x", pady=(8, 0))
 
     def apply_update(self) -> None:
@@ -159,7 +159,7 @@ class TipStreamDesktop:
         if os.name != "nt":
             self.status.set("Aktualizacja zostanie uruchomiona przy następnym starcie launchera.")
             return
-        script_path = data_dir() / "restart_tipstream.ps1"
+        script_path = data_dir() / "restart_giftstream.ps1"
         ps_quote = lambda value: "'" + str(value).replace("'", "''") + "'"
         script = (
             f"$oldPid = {os.getpid()}\n"

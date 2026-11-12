@@ -1,4 +1,4 @@
-"""TipStream — API i serwer webowy."""
+"""GiftStream — API i serwer webowy."""
 from __future__ import annotations
 
 import asyncio
@@ -33,10 +33,10 @@ ROOT = bundle_root()
 DATA = data_dir()
 WEB = ROOT / "web"
 CONFIG_PATH = DATA / "config.json"
-GITHUB_RELEASES_URL = "https://github.com/rejson59/TipStream/releases"
+GITHUB_RELEASES_URL = "https://github.com/rejson59/GiftStream/releases"
 _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
-app = FastAPI(title="TipStream", version="0.1.0",
+app = FastAPI(title="GiftStream", version="0.2.0",
               description="Prezenty z TikTok LIVE sterują grą")
 connector: TikTokConnector
 config = AppConfig()
@@ -164,7 +164,7 @@ app.mount("/static", StaticFiles(directory=WEB), name="static")
 # -- API -------------------------------------------------------------------
 @app.get("/api/health")
 async def health() -> dict:
-    return {"ok": True, "app": "TipStream", "version": installed_release_tag()}
+    return {"ok": True, "app": "GiftStream", "version": installed_release_tag()}
 
 @app.get("/api/download-info")
 async def download_info() -> dict:
@@ -174,11 +174,11 @@ async def download_info() -> dict:
         return _DOWNLOAD_INFO_CACHE["data"]
     fallback = {"available": False, "url": GITHUB_RELEASES_URL,
                 "releases_url": GITHUB_RELEASES_URL,
-                "message": "Pierwsze wydanie Windows nie jest jeszcze opublikowane."}
+                "message": "Wydanie GiftStream dla Windows nie jest obecnie dostępne."}
     def check_github_release() -> dict:
         request = urllib.request.Request(
-            "https://api.github.com/repos/rejson59/TipStream/releases/latest",
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "TipStream-Preview/1"},
+            "https://api.github.com/repos/rejson59/GiftStream/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "GiftStream-Preview/1"},
         )
         try:
             with urllib.request.urlopen(request, timeout=4) as response:
@@ -187,12 +187,13 @@ async def download_info() -> dict:
             if exc.code == 404:
                 return fallback
             raise
-        asset = next((a for a in release.get("assets", []) if a.get("name") == "TipStream.exe"), None)
+        assets = {a.get("name"): a for a in release.get("assets", [])}
+        asset = assets.get("GiftStream.exe") or assets.get("TipStream.exe")
         asset_url = str((asset or {}).get("browser_download_url", ""))
         if asset and asset_url.startswith("https://github.com/"):
             return {"available": True, "url": asset_url, "releases_url": GITHUB_RELEASES_URL,
                     "version": release.get("tag_name", ""),
-                    "message": f"Pobierz TipStream {release.get('tag_name', '')} dla Windows."}
+                    "message": f"Pobierz GiftStream {release.get('tag_name', '')} dla Windows."}
         return fallback
 
     try:
@@ -419,7 +420,7 @@ async def bridge_event(ev: TikTokEvent, x_tipstream_secret: str | None = Header(
 
 @app.post("/api/bridge/action")
 async def bridge_action(data: dict) -> dict:
-    """Game -> TipStream (e.g. report score/state); forwarded to dashboard/overlay."""
+    """Game -> GiftStream (e.g. report score/state); forwarded to dashboard/overlay."""
     data.setdefault("ts", __import__("time").time())
     await hub.publish_status({"game": data})
     return {"ok": True}

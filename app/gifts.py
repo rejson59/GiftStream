@@ -1,6 +1,6 @@
 """Lokalna biblioteka giftów: przykładowe wpisy + metadane z LIVE.
 
-Oryginalne grafiki nie są kopiowane ani hostowane przez TipStream. Gdy
+Oryginalne grafiki nie są kopiowane ani hostowane przez GiftStream. Gdy
 TikTokLive zwróci adres CDN grafiki prezentu, zapisujemy adres źródłowy,
 aby można go użyć na nakładce OBS.
 """

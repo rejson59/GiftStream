@@ -1,6 +1,6 @@
 # Katalog pomysłów na interaktywne gry
 
-Katalog w panelu jest inspiracją, a nie deklaracją gotowych, oficjalnych integracji z tymi tytułami. Obecnie pierwszy działający adapter to ServerTap dla serwerów Minecraft; pozostałe gry wymagają własnego lokalnego modu/pluginu, który odbierze akcje TipStream.
+Katalog w panelu jest inspiracją, a nie deklaracją gotowych, oficjalnych integracji z tymi tytułami. Obecnie pierwszy działający adapter to ServerTap dla serwerów Minecraft; pozostałe gry wymagają własnego lokalnego modu/pluginu, który odbierze akcje GiftStream.
 
 ## Tryby do zaprojektowania
 

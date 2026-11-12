@@ -1,6 +1,6 @@
-# TipStream
+# GiftStream
 
-**Prezenty z TikTok LIVE sterują grą.** TipStream przypisuje prezenty, polubienia, obserwacje i komentarze do akcji w grze. Skonfiguruj preset, przetestuj symulatorem, a potem połącz grę przez WebSocket, HTTP, UDP lub adapter Minecraft.
+**Prezenty z TikTok LIVE sterują grą.** GiftStream przypisuje prezenty, polubienia, obserwacje i komentarze do akcji w grze. Skonfiguruj preset, przetestuj symulatorem, a potem połącz grę przez WebSocket, HTTP, UDP lub adapter Minecraft.
 
 ## Co działa w MVP
 
@@ -11,18 +11,16 @@
 - Gra demo „Zombie: przetrwanie” i nakładka OBS.
 - Integracja Minecraft **Paper / Spigot / Bukkit przez ServerTap**. Obsługuje ograniczony zestaw komend z allow-listy; konfiguracja w panelu Integracje.
 - Katalog pomysłów na interaktywne tryby: Minecraft, 7 Days to Die, GTA V offline, Raft, Valheim, Roblox.
-- Biblioteka giftów: wartości przykładowe są oznaczone jako próbki; prawdziwe ID, ceny i adresy oryginalnych grafik pobierane są z metadanych giftów odebranych podczas LIVE. TipStream nie kopiuje ani nie hostuje grafik TikToka.
+- Biblioteka giftów: wartości przykładowe są oznaczone jako próbki; prawdziwe ID, ceny i adresy oryginalnych grafik pobierane są z metadanych giftów odebranych podczas LIVE. GiftStream nie kopiuje ani nie hostuje grafik TikToka.
 - Lokalne pliki JSON; konto ani baza danych nie są wymagane do testów.
 
 ## Aplikacja Windows i automatyczne aktualizacje
 
-Wydania Windows x64 są budowane przez GitHub Actions po opublikowaniu tagu `vX.Y.Z`. Z wydania pobierasz tylko `TipStream.exe` (launcher). Przy pierwszym uruchomieniu sprawdza on GitHub Releases, pobiera paczkę aplikacji, weryfikuje SHA-256, instaluje ją bez uprawnień administratora w `%LOCALAPPDATA%\\TipStream` i uruchamia. Przy każdym następnym uruchomieniu launchera sprawdza, czy jest nowsze wydanie i automatycznie je pobiera. Po uruchomieniu aplikacji otwiera lokalny panel; Python nie musi być zainstalowany.
+**GiftStream dla Windows jest dostępny.** Pobierz [GiftStream.exe z GitHub Releases](https://github.com/rejson59/GiftStream/releases/latest). To mały launcher: przy pierwszym uruchomieniu pobiera desktopową aplikację, a przy kolejnych uruchomieniach sprawdza najnowszą wersję. Python nie musi być zainstalowany.
 
-Launcher potrzebuje internetu przy pierwszym uruchomieniu. Jeżeli po instalacji GitHub jest niedostępny, uruchomi ostatnią poprawnie pobraną wersję. Otwarta aplikacja dodatkowo sprawdza aktualizacje co godzinę i pobiera je w tle; nie przerywa transmisji. Po pobraniu pokaże przycisk zastosowania aktualizacji — najlepiej kliknąć go po LIVE. Sam plik launchera warto zachować i uruchamiać zamiast wersjonowanego `TipStreamApp.exe`.
+Otwarta aplikacja sprawdza aktualizacje co godzinę i pobiera je w tle, nie przerywając transmisji. Po pobraniu pokaże przycisk do zastosowania aktualizacji. Presety, ustawienia, gift-katalog i historia są zachowane w `%LOCALAPPDATA%\TipStream` — dotychczasowej ścieżce zgodności, więc wcześniejsze dane TipStream pozostają dostępne. Przy problemie z siecią launcher uruchomi ostatnią poprawnie pobraną wersję.
 
-Dane użytkownika (presety, ustawienia, katalog giftów i historia zdarzeń) są przechowywane osobno w `%LOCALAPPDATA%\\TipStream`, więc aktualizacja ich nie nadpisuje. Port lokalny jest związany tylko z `127.0.0.1`.
-
-> **Ważne:** konfiguracja wydania nie oznacza jeszcze, że plik `.exe` jest już opublikowany. Pierwsza paczka pojawi się po opublikowaniu tagu wersji `vX.Y.Z` na GitHubie i pomyślnym zakończeniu workflow. Środowisko developerskie TipStream działa na Linuksie, dlatego docelowy plik Windows buduje GitHub Actions na runnerze Windows.
+Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z`. Nowy launcher nazywa się `GiftStream.exe`. Wewnętrzne nazwy paczek `TipStreamApp` i folder `%LOCALAPPDATA%\TipStream` pozostają dla zgodności ze starszymi instalacjami. Pliki nie są podpisane Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
 
 ## Uruchomienie deweloperskie
 
@@ -39,7 +37,7 @@ Otwórz `http://localhost:8000`. Domyślnie działa symulator. „Szybki test”
 
 ## Minecraft
 
-Zainstaluj ServerTap na Paper/Spigot/Bukkit, włącz klucz API w konfiguracji wtyczki, a następnie w TipStream przejdź do **Integracje → Minecraft przez ServerTap**. Wpisz bazowy adres, klucz oraz nick gracza; przetestuj i włącz integrację. Szczegółowa instrukcja: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+Zainstaluj ServerTap na Paper/Spigot/Bukkit, włącz klucz API w konfiguracji wtyczki, a następnie w GiftStream przejdź do **Integracje → Minecraft przez ServerTap**. Wpisz bazowy adres, klucz oraz nick gracza; przetestuj i włącz integrację. Szczegółowa instrukcja: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
 
 Komendy są budowane z allow-listy i ograniczane parametrami. Komentarz, nick widza ani treść eventu webhook nigdy nie są wykonywane jako polecenie konsoli Minecraft. Nie wystawiaj portu ServerTap publicznie bez ochrony.
 

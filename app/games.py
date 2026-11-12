@@ -1,4 +1,4 @@
-"""Katalog gier i gotowych pomysłów na interakcje dla TipStream."""
+"""Katalog gier i gotowych pomysłów na interakcje dla GiftStream."""
 from __future__ import annotations
 
 GAMES = [
@@ -31,7 +31,7 @@ GAMES = [
     {
         "id":"seven-days","title":"7 Days to Die: horda","category":"Survival",
         "status":"idea","icon":"🧟", "tagline":"Czat decyduje, co przetrwa do następnego świtu.",
-        "description":"Pomysły na zdarzenia: hordy, zmiana pory dnia, losowy ekwipunek, pułapki i teleporty. Potrzebny adapter/mod gry, który odbierze akcje TipStream.",
+        "description":"Pomysły na zdarzenia: hordy, zmiana pory dnia, losowy ekwipunek, pułapki i teleporty. Potrzebny adapter/mod gry, który odbierze akcje GiftStream.",
         "ideas":["Róża → pojedynczy zombie", "Donut → amunicja", "Smok → horda", "Lew → noc natychmiast"],
     },
     {

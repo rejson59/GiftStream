@@ -1,4 +1,4 @@
-"""TipStream — konektor TikTok Live.
+"""GiftStream — konektor TikTok Live.
 
 Tryby:
   1. "tiktok"    — nieoficjalna biblioteka TikTokLive (isaackogan/TikTokLive).

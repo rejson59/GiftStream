@@ -1,4 +1,4 @@
-"""Windows bootstrapper: checks GitHub Releases, verifies ZIP and starts TipStream."""
+"""Windows bootstrapper: checks GitHub Releases, verifies ZIP and starts GiftStream."""
 from __future__ import annotations
 
 import os
@@ -16,22 +16,22 @@ if __package__ in (None, ""):
 from app.paths import data_dir
 from app.updater import UpdateError, prepare_latest
 
-GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/TipStream")
+GITHUB_REPOSITORY = os.environ.get("TIPSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
 
 
 class Launcher:
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("TipStream — aktualizator")
+        self.root.title("GiftStream — aktualizator")
         self.root.geometry("390x190")
         self.root.resizable(False, False)
         self.root.configure(bg="#0b0b0d")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
-        self.status = tk.StringVar(value="Sprawdzam aktualizacje TipStream…")
+        self.status = tk.StringVar(value="Sprawdzam aktualizacje GiftStream…")
 
         outer = tk.Frame(self.root, bg="#0b0b0d", padx=24, pady=20)
         outer.pack(fill="both", expand=True)
-        tk.Label(outer, text="tipstream", fg="#f2f1ef", bg="#0b0b0d",
+        tk.Label(outer, text="giftstream", fg="#f2f1ef", bg="#0b0b0d",
                  font=("Segoe UI", 20, "bold")).pack(anchor="w")
         tk.Label(outer, textvariable=self.status, fg="#b5b5bb", bg="#0b0b0d",
                  font=("Segoe UI", 10), wraplength=335, justify="left").pack(anchor="w", pady=(10, 13))
@@ -59,11 +59,11 @@ class Launcher:
         except UpdateError as exc:
             self.root.after(0, lambda: self._failed(str(exc)))
         except Exception as exc:  # nie pozwól, aby nieoczekiwany błąd zamknął launcher bez komunikatu
-            self.root.after(0, lambda: self._failed(f"Nie udało się uruchomić TipStream: {exc}"))
+            self.root.after(0, lambda: self._failed(f"Nie udało się uruchomić GiftStream: {exc}"))
 
     def _launch(self, tag: str, executable: Path, updated: bool, message: str) -> None:
         try:
-            self.status.set(f"{message}\nUruchamiam TipStream {tag}…")
+            self.status.set(f"{message}\nUruchamiam GiftStream {tag}…")
             subprocess.Popen([str(executable)], cwd=str(data_dir()), close_fds=True)
             self.root.after(650, self.root.destroy)
         except OSError as exc:

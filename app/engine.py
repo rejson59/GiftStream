@@ -1,4 +1,4 @@
-"""TipStream — silnik reguł (preset engine).
+"""GiftStream — silnik reguł (preset engine).
 
 Przepływ: TikTokEvent -> dopasowanie reguł presetów -> GameAction -> gra.
 Obsługuje: cooldowny, streaki prezentów, progi lajków, paid interrupts.

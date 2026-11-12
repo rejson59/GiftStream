@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+# Keep the legacy directory so existing TipStream users retain settings and update state.
 APP_NAME = "TipStream"
 
 

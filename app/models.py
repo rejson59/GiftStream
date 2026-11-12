@@ -1,4 +1,4 @@
-"""TipStream — modele danych (Pydantic).
+"""GiftStream — modele danych (Pydantic).
 
 Odpowiadają strukturze StreamToEarn:
   Preset = lista reguł (trigger -> akcja w grze)
