@@ -102,6 +102,8 @@ class AppConfig(BaseModel):
     minecraft_enabled: bool = False
     tts_enabled: bool = False
     tts_voice: str = "pl-PL"
+    sound_alerts: bool = False
+    sound_volume: float = Field(default=0.55, ge=0.0, le=1.0)
     overlay_template: str = "grid"           # grid | list | minimal
     bridge_webhook_secret: str = ""
     simulator_interval_sec: float = 3.0

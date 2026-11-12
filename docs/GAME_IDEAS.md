@@ -1,8 +1,8 @@
 # Katalog pomysłów na interaktywne gry
 
-Katalog w panelu jest inspiracją, a nie deklaracją gotowych, oficjalnych integracji z tymi tytułami. Obecnie pierwszy działający adapter to ServerTap dla serwerów Minecraft; pozostałe gry wymagają własnego lokalnego modu/pluginu, który odbierze akcje GiftStream.
+Katalog w panelu rozdziela gotowe presety od pomysłów, które wymagają moda lub adaptera. Wbudowana gra „Arena zombie” działa od razu przez WebSocket. Minecraft ma gotowe presety: przetrwanie, parkour, arena widzów kontra streamer i nocna horda; akcje są ograniczone allow-listą ServerTap.
 
-## Tryby do zaprojektowania
+## Dodatkowe tryby do zaprojektowania
 
 ### Minecraft
 - **Przetrwanie:** prezenty przywołują moby, dają ekwipunek lub pomagają graczowi.

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from . import presets as preset_store
 from .bridge import Hub
@@ -264,7 +264,10 @@ async def get_config() -> dict:
 async def update_config(data: dict[str, Any]) -> dict:
     global config
     merged = {**config.model_dump(), **data}
-    config = AppConfig(**merged)
+    try:
+        config = AppConfig(**merged)
+    except ValidationError as exc:
+        raise HTTPException(422, detail=exc.errors()) from exc
     sync_minecraft_client()
     save_config()
     return public_config()

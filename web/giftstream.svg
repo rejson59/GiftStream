@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">GiftStream</title>
+  <rect x="3" y="3" width="58" height="58" rx="16" fill="#111418" stroke="#354225" stroke-width="2"/>
+  <path d="M17 29h30v25a4 4 0 0 1-4 4H21a4 4 0 0 1-4-4z" fill="#c8f36a"/>
+  <path d="M17 39h30v5H17z" fill="#17200f"/>
+  <path d="M29 29h6v29h-6z" fill="#17200f"/>
+  <rect x="14" y="23" width="36" height="9" rx="3" fill="#dcffa0"/>
+  <circle cx="24" cy="18" r="7" fill="none" stroke="#dcffa0" stroke-width="5"/>
+  <circle cx="40" cy="18" r="7" fill="none" stroke="#dcffa0" stroke-width="5"/>
+  <circle cx="32" cy="22" r="4.5" fill="#a6df35"/>
+</svg>

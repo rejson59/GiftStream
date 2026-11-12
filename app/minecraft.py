@@ -50,6 +50,10 @@ def build_commands(action: str, params: dict, player: str) -> list[str] | None:
     if action == "speed_boost":
         duration = max(1, min(int(params.get("duration_sec", 10)), 60))
         return [f"effect give {player} minecraft:speed {duration} 1 true"]
+    if action == "jump":
+        duration = max(1, min(int(params.get("duration_sec", 6)), 30))
+        amplifier = max(0, min(int(params.get("amplifier", 1)), 3))
+        return [f"effect give {player} minecraft:jump_boost {duration} {amplifier} true"]
     if action in {"drop_diamond", "drop_item", "give_item"}:
         # W MVP typ przedmiotu jest celowo ograniczony do allow-listy.
         item = params.get("item", "diamond")

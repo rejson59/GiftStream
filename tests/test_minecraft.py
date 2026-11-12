@@ -15,6 +15,11 @@ def test_minecraft_untrusted_entity_falls_back_to_zombie():
     assert ";" not in command
 
 
+def test_minecraft_jump_uses_bounded_jump_boost_effect():
+    commands = build_commands("jump", {"duration_sec": 999, "amplifier": 99}, "Streamer_1")
+    assert commands == ["effect give Streamer_1 minecraft:jump_boost 30 3 true"]
+
+
 def test_minecraft_item_uses_allow_list():
     command = build_commands("give_item", {"item": "command_block", "count": 999}, "Streamer_1")[0]
     assert command == "give Streamer_1 minecraft:diamond 64"

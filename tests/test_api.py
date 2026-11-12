@@ -41,6 +41,15 @@ def test_download_info_returns_the_single_application_executable(monkeypatch):
     main._DOWNLOAD_INFO_CACHE.update(original_cache)
 
 
+def test_game_catalog_exposes_ready_modes_without_server_rules():
+    result = TestClient(main.app).get("/api/games").json()
+    by_id = {game["id"]: game for game in result}
+    assert by_id["giftstream-zombie-arena"]["game_url"] == "/game"
+    assert by_id["minecraft-parkour"]["status"] == "bridge"
+    assert "rules" not in by_id["minecraft-parkour"]
+    assert by_id["lethal-company"]["status"] == "idea"
+
+
 def test_gift_catalog_refresh_endpoint_returns_latest_catalog(monkeypatch):
     monkeypatch.setattr(main, "_refresh_catalog_safely", lambda: 100)
     monkeypatch.setattr(main, "list_gifts", lambda _query="": [{"id": i} for i in range(100)])
@@ -48,6 +57,20 @@ def test_gift_catalog_refresh_endpoint_returns_latest_catalog(monkeypatch):
     assert result["ok"] is True
     assert result["count"] == 100
     assert len(result["gifts"]) == 100
+
+
+def test_live_audio_preferences_are_persisted_without_exposing_secrets(monkeypatch):
+    monkeypatch.setattr(main, "config", AppConfig())
+    monkeypatch.setattr(main, "save_config", lambda: None)
+    response = TestClient(main.app).put("/api/config", json={
+        "tts_enabled": True, "tts_voice": "pl-PL", "sound_alerts": True, "sound_volume": 0.7,
+    })
+    assert response.status_code == 200
+    assert response.json()["tts_enabled"] is True
+    assert response.json()["sound_alerts"] is True
+    assert response.json()["sound_volume"] == 0.7
+    invalid = TestClient(main.app).put("/api/config", json={"sound_volume": 1.5})
+    assert invalid.status_code == 422
 
 
 def test_update_check_can_be_requested_and_reports_completion():
