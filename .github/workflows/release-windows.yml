@@ -1,4 +1,4 @@
-name: Build and publish TipStream for Windows
+name: Build and publish GiftStream for Windows
 
 on:
   push:
@@ -52,7 +52,7 @@ jobs:
         shell: pwsh
         run: >-
           pyinstaller --noconfirm --clean --onefile --windowed
-          --name TipStream
+          --name GiftStream
           --paths .
           app/launcher.py
 
@@ -60,7 +60,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release-assets | Out-Null
-          Copy-Item dist/TipStream.exe release-assets/TipStream.exe
+          Copy-Item dist/GiftStream.exe release-assets/GiftStream.exe
+          # Keep the old launcher asset name so v0.1.0 installations can update.
+          Copy-Item dist/GiftStream.exe release-assets/TipStream.exe
           Compress-Archive -Path dist/TipStreamApp.exe -DestinationPath release-assets/TipStreamApp-win-x64.zip -CompressionLevel Optimal
           $hash = (Get-FileHash release-assets/TipStreamApp-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  TipStreamApp-win-x64.zip" | Set-Content -Encoding ascii release-assets/checksums.txt
@@ -74,8 +76,9 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           gh release create $tag `
             --repo $env:GITHUB_REPOSITORY `
-            --title "TipStream $tag" `
+            --title "GiftStream $tag" `
             --generate-notes `
+            release-assets/GiftStream.exe `
             release-assets/TipStream.exe `
             release-assets/TipStreamApp-win-x64.zip `
             release-assets/checksums.txt

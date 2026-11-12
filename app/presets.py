@@ -1,4 +1,4 @@
-"""TipStream — magazyn presetów (JSON na dysku + opcjonalnie Supabase).
+"""GiftStream — magazyn presetów (JSON na dysku + opcjonalnie Supabase).
 
 Preset = nazwana lista reguł "gift -> akcja". Streamer może przełączać
 presety w trakcie streama (jak w StreamToEarn).

@@ -1,4 +1,4 @@
-# TipStream Game Bridge
+# GiftStream Game Bridge
 
 The bridge sends normalized actions to supported games. Choose one or combine several.
 
@@ -37,7 +37,7 @@ For a protected webhook, set `BRIDGE_WEBHOOK_SECRET` in `.env` and send it in th
 
 ## 3. UDP (localhost only)
 
-Every triggered action is also sent as one UTF-8 JSON datagram to `127.0.0.1:47821`. Your local game/mod can bind that port and parse each datagram. Example payload is the same as the `data` in a WebSocket action frame. TipStream sends to local loopback so no gameplay command port is exposed to the public network.
+Every triggered action is also sent as one UTF-8 JSON datagram to `127.0.0.1:47821`. Your local game/mod can bind that port and parse each datagram. Example payload is the same as the `data` in a WebSocket action frame. GiftStream sends to local loopback so no gameplay command port is exposed to the public network.
 
 ## 4. JSONL file
 

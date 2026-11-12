@@ -1,4 +1,4 @@
-"""TipStream — bridge do gier (uniwersalny).
+"""GiftStream — bridge do gier (uniwersalny).
 
 Gra łączy się na 4 sposoby (wybierz co pasuje do Twojej gry):
   1. WebSocket  /ws/game      — demo gra webowa (game.html)

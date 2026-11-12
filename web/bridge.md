@@ -1,4 +1,4 @@
-# TipStream Game Bridge
+# GiftStream Game Bridge
 
 Every matching event becomes a `GameAction` and is broadcast to connected browser games over `/ws/game`. Actions are also sent to UDP `127.0.0.1:47821` and appended to `events.jsonl`.
 

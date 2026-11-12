@@ -1,4 +1,4 @@
-"""Pobieranie wydania TipStream z GitHub Releases i bezpieczna instalacja ZIP."""
+"""Pobieranie wydania GiftStream z GitHub Releases i bezpieczna instalacja ZIP."""
 from __future__ import annotations
 
 import hashlib
@@ -35,7 +35,7 @@ def _open(url: str, timeout: int = 15) -> bytes:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "TipStream-Updater/1",
+            "User-Agent": "GiftStream-Updater/1",
             "Accept": "application/vnd.github+json, application/octet-stream, text/plain",
             "X-GitHub-Api-Version": "2022-11-28",
         },
@@ -160,4 +160,4 @@ def prepare_latest(repository: str, data_root: Path) -> tuple[str, Path, bool, s
             return cached[0], cached[1], False, f"Aktualizacja się nie powiodła — uruchamiam zapisaną wersję ({exc})."
         raise UpdateError(f"Nie można pobrać aplikacji: {exc}") from exc
 
-    return release["tag"], installed, True, f"Pobrano TipStream {release['tag']}."
+    return release["tag"], installed, True, f"Pobrano GiftStream {release['tag']}."
