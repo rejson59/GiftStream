@@ -38,6 +38,41 @@ def _is_signing_rate_limit(exc: Exception) -> bool:
             or "rate_limit_account_hour" in str(exc).casefold())
 
 
+def _is_user_offline(exc: BaseException) -> bool:
+    """TikTokLive uses this expected signal when the creator is not LIVE."""
+    return type(exc).__name__ == "UserOfflineError"
+
+
+def _retry_delay(attempt: int, *, user_offline: bool = False) -> float:
+    """Back off further for an offline room, without polling it every few seconds."""
+    if user_offline:
+        return min(300.0, 120.0 * max(attempt, 1)) + random.uniform(0.0, 20.0)
+    delay = min(60.0, float(2 ** min(attempt, 6)))
+    return delay + random.uniform(0.0, min(5.0, delay / 4))
+
+
+async def _disconnect_tiktok_client(client, close_http: bool = False) -> None:  # noqa: ANN001
+    """Disconnect on the client's loop, safely draining its task without nested loop runners."""
+    websocket = getattr(client, "_ws", None)
+    if websocket is not None:
+        await websocket.disconnect()
+    event_task = getattr(client, "_event_loop_task", None)
+    if event_task is not None:
+        await asyncio.gather(event_task, return_exceptions=True)
+        client._event_loop_task = None
+    video = getattr(getattr(client, "_web", None), "fetch_video_data", None)
+    if video is not None and getattr(video, "is_recording", False):
+        video.stop()
+    for name in ("_room_id", "_room_info", "_gift_info"):
+        if hasattr(client, name):
+            setattr(client, name, None)
+    if close_http:
+        web_client = getattr(client, "_web", None)
+        close = getattr(web_client, "close", None)
+        if close is not None:
+            await close()
+
+
 class TikTokConnector:
     def __init__(self, on_event: OnEvent):
         self.on_event = on_event
@@ -67,6 +102,8 @@ class TikTokConnector:
         self.username = normalized_username
         self._stop = asyncio.Event()
         self._tt_stop = threading.Event()
+        self._tt_connect_task = None
+        self._tt_ws_task = None
         self.last_error = ""
         self.retry_attempt = 0
         self.retry_in = 0.0
@@ -106,23 +143,37 @@ class TikTokConnector:
 
         client = getattr(self, "_tt_client", None)
         thread = self._thread
-        if client is not None:
-            loop = getattr(client, "_owned_asyncio_loop", None)
+        loop = getattr(client, "_owned_asyncio_loop", None) if client is not None else None
+        connect_task = getattr(self, "_tt_connect_task", None)
+        websocket_task = getattr(self, "_tt_ws_task", None)
+        # The worker owns TikTokLive's loop. Disconnect a running websocket or
+        # cancel an in-progress HTTP/start request; never nest run_until_complete.
+        if loop is not None and not loop.is_closed() and loop.is_running():
             try:
-                if loop is not None and not loop.is_closed():
-                    if loop.is_running():
-                        future = asyncio.run_coroutine_threadsafe(client.disconnect(close_client=True), loop)
-                        await asyncio.wait_for(asyncio.wrap_future(future), timeout=8)
-                    else:
-                        await asyncio.wait_for(asyncio.to_thread(loop.run_until_complete,
-                                                                 client.disconnect(close_client=True)), timeout=8)
+                if websocket_task is not None:
+                    future = asyncio.run_coroutine_threadsafe(
+                        _disconnect_tiktok_client(client, close_http=False), loop)
+                    await asyncio.wait_for(asyncio.wrap_future(future), timeout=8)
+                elif connect_task is not None:
+                    loop.call_soon_threadsafe(connect_task.cancel)
+            except Exception as exc:
+                diagnostics.warning("Nie udało się zatrzymać zadania TikTokLive: %s", exc)
+        if thread is not None and thread.is_alive():
+            await asyncio.to_thread(thread.join, 8)
+        elif client is not None and loop is not None and not loop.is_closed() and not loop.is_running():
+            # A client without a live worker can be safely cleaned up here.
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(loop.run_until_complete, _disconnect_tiktok_client(client, True)),
+                    timeout=8,
+                )
+                loop.close()
             except Exception as exc:
                 diagnostics.warning("Zamykanie TikTokLive zakończyło się z błędem: %s", exc)
-        if thread is not None and thread.is_alive():
-            await asyncio.to_thread(thread.join, 3)
         if thread is None or not thread.is_alive():
             self._thread = None
             self._tt_client = None
+            self._tt_connect_task = None
             self.connection_state = "disconnected"
             self.retry_in = 0.0
             if was_active:
@@ -323,20 +374,56 @@ class TikTokConnector:
                              viewer_count=getattr(event, "viewer_count", 0) or 0, source="tiktok"))
 
         def _run() -> None:
-            # TikTokLive.run() blocks until the websocket task ends. Reuse its
-            # owned event loop, explicitly clean up the ended session, then retry.
+            # Keep TikTokLive's asyncio loop owned by this worker thread. Calling
+            # client.run() hides its connect task, so drive start() explicitly to
+            # let Stop cancel it safely without nested run_until_complete calls.
+            owned_loop = client._asyncio_loop
             while not self._tt_stop.is_set():
                 self.connected = False
                 self.connection_state = "connecting" if self.retry_attempt == 0 else "reconnecting"
+                self.last_error = ""
+                self.retry_in = 0.0
                 rate_limited = False
+                user_offline = False
+
+                async def _connect_once():
+                    if self._tt_stop.is_set():
+                        return
+                    self._tt_connect_task = asyncio.current_task()
+                    if self._tt_stop.is_set():
+                        return
+                    try:
+                        task = await client.start(fetch_gift_info=True, fetch_live_check=True)
+                        self._tt_ws_task = task
+                        await task
+                    finally:
+                        self._tt_connect_task = None
+                        self._tt_ws_task = None
+
                 try:
-                    client.run(fetch_gift_info=True, fetch_live_check=True)
+                    owned_loop.run_until_complete(_connect_once())
                     if not self._tt_stop.is_set():
                         raise ConnectionError("TikTokLive zakończył pętlę websocket bez rozłączenia użytkownika.")
+                except asyncio.CancelledError:
+                    self.connected = False
+                    if not self._tt_stop.is_set():
+                        self.last_error = "Zadanie połączenia TikTok LIVE zostało nieoczekiwanie anulowane."
+                        self.connection_state = "reconnecting"
+                        diagnostics.warning(self.last_error)
                 except Exception as exc:
                     self.connected = False
-                    self.last_error = f"{type(exc).__name__}: {exc}"
-                    if not self._tt_stop.is_set() and _is_signing_rate_limit(exc):
+                    if _is_user_offline(exc) and not self._tt_stop.is_set():
+                        # Offline is a normal LIVE state, not a connection crash.
+                        # Recheck less often and do not emit repeated tracebacks.
+                        user_offline = True
+                        self.connection_state = "offline"
+                        self.last_error = (
+                            f"Kanał @{self.username} jest obecnie offline. GiftStream będzie "
+                            "automatycznie sprawdzać transmisję co 2–5 minut."
+                        )
+                        diagnostics.warning("TikTok LIVE potwierdził, że @%s jest offline; ponowię sprawdzenie później.",
+                                            self.username)
+                    elif not self._tt_stop.is_set() and _is_signing_rate_limit(exc):
                         # This is an account-level signing quota, not a transient
                         # websocket failure. Reconnecting immediately only repeats
                         # the rejected request and can consume more quota.
@@ -351,29 +438,42 @@ class TikTokConnector:
                         self.retry_in = 0.0
                         diagnostics.error("%s Szczegóły odpowiedzi: %s", self.last_error, exc)
                     elif not self._tt_stop.is_set():
+                        self.last_error = f"{type(exc).__name__}: {exc}"
                         self.connection_state = "reconnecting"
                         diagnostics.error("Połączenie TikTok LIVE nie powiodło się: %s", self.last_error, exc_info=exc)
                 finally:
-                    owned_loop = getattr(client, "_owned_asyncio_loop", None)
-                    if owned_loop is not None and not owned_loop.is_closed() and not owned_loop.is_running():
+                    self._tt_connect_task = None
+                    if not owned_loop.is_closed() and not owned_loop.is_running():
                         try:
-                            owned_loop.run_until_complete(client.disconnect(close_client=False))
+                            owned_loop.run_until_complete(_disconnect_tiktok_client(client, close_http=False))
                         except Exception as cleanup_error:
                             if not self._tt_stop.is_set():
                                 diagnostics.warning("Sprzątanie sesji TikTokLive: %s", cleanup_error)
                 if self._tt_stop.is_set() or rate_limited:
                     break
                 self.retry_attempt += 1
-                delay = min(60.0, float(2 ** min(self.retry_attempt, 6)))
-                delay += random.uniform(0.0, min(5.0, delay / 4))
+                delay = _retry_delay(self.retry_attempt, user_offline=user_offline)
                 self.retry_in = time.monotonic() + delay
-                diagnostics.warning("Ponowna próba TikTok LIVE nr %s za około %s s.",
-                                    self.retry_attempt, round(delay))
+                if user_offline:
+                    self.connection_state = "offline"
+                    diagnostics.info("Następne sprawdzenie statusu LIVE za około %s s.", round(delay))
+                else:
+                    self.connection_state = "reconnecting"
+                    diagnostics.warning("Ponowna próba TikTok LIVE nr %s za około %s s.",
+                                        self.retry_attempt, round(delay))
                 self._tt_stop.wait(delay)
             self.connected = False
-            if self.connection_state != "error":
+            if self.connection_state not in {"error", "offline"}:
                 self.connection_state = "disconnected"
             self.retry_in = 0.0
+            if not owned_loop.is_closed() and not owned_loop.is_running():
+                try:
+                    owned_loop.run_until_complete(_disconnect_tiktok_client(client, close_http=True))
+                except Exception as cleanup_error:
+                    diagnostics.warning("Końcowe zamykanie sesji TikTokLive: %s", cleanup_error)
+                finally:
+                    owned_loop.close()
+            diagnostics.info("Zakończono wątek TikTokLive dla @%s.", self.username)
 
         self.connection_state = "connecting"
         self._thread = threading.Thread(target=_run, name="GiftStream-TikTokLive", daemon=True)

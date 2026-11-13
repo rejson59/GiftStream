@@ -2,7 +2,7 @@ import asyncio
 import threading
 
 from app.diagnostics import _redact
-from app.tiktok_connector import TikTokConnector, _is_signing_rate_limit
+from app.tiktok_connector import TikTokConnector, _is_signing_rate_limit, _is_user_offline, _retry_delay
 
 
 def test_signing_account_hour_limit_is_classified_as_non_retryable():
@@ -12,6 +12,16 @@ def test_signing_account_hour_limit_is_classified_as_non_retryable():
     assert _is_signing_rate_limit(SignatureRateLimitError("too many connections"))
     assert _is_signing_rate_limit(RuntimeError("rate_limit_account_hour"))
     assert not _is_signing_rate_limit(ConnectionError("websocket closed"))
+
+
+def test_user_offline_is_expected_and_retried_at_a_slow_cadence():
+    class UserOfflineError(Exception):
+        pass
+
+    assert _is_user_offline(UserOfflineError())
+    assert not _is_user_offline(ConnectionError("network disconnected"))
+    assert 120 <= _retry_delay(1, user_offline=True) <= 140
+    assert 300 <= _retry_delay(4, user_offline=True) <= 320
 
 
 def test_connection_start_is_idempotent_while_client_is_connecting():
@@ -46,18 +56,25 @@ def test_stop_awaits_tiktoklive_async_disconnect():
         loop = asyncio.new_event_loop()
         called = []
 
+        class WebClient:
+            async def close(self):
+                called.append("http-closed")
+
+        class WebSocket:
+            async def disconnect(self):
+                called.append("websocket-disconnected")
+
         class Client:
             _owned_asyncio_loop = loop
-
-            async def disconnect(self, close_client=False):
-                called.append(close_client)
+            _web = WebClient()
+            _ws = WebSocket()
 
         connector._tt_client = Client()
         connector.mode = "tiktok"
         connector.connection_state = "connected"
         connector.connected = True
         await connector.stop()
-        assert called == [True]
+        assert called == ["websocket-disconnected", "http-closed"]
         assert connector.connection_state == "disconnected"
         assert not connector.connected
         loop.close()
