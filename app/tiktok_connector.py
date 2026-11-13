@@ -32,6 +32,12 @@ SIM_COMMENTS = ["GG!", "boss!!", "dawaj!", "lecz się", "skacz w lewo", "heal pl
                 "to jest super", "jeszcze jeden!", "OMG", "🔥🔥🔥", "boss", "pomocy"]
 
 
+def _is_signing_rate_limit(exc: Exception) -> bool:
+    """Whether TikTokLive's upstream signing service explicitly rate-limited us."""
+    return (type(exc).__name__ == "SignatureRateLimitError"
+            or "rate_limit_account_hour" in str(exc).casefold())
+
+
 class TikTokConnector:
     def __init__(self, on_event: OnEvent):
         self.on_event = on_event
@@ -322,6 +328,7 @@ class TikTokConnector:
             while not self._tt_stop.is_set():
                 self.connected = False
                 self.connection_state = "connecting" if self.retry_attempt == 0 else "reconnecting"
+                rate_limited = False
                 try:
                     client.run(fetch_gift_info=True, fetch_live_check=True)
                     if not self._tt_stop.is_set():
@@ -329,7 +336,21 @@ class TikTokConnector:
                 except Exception as exc:
                     self.connected = False
                     self.last_error = f"{type(exc).__name__}: {exc}"
-                    if not self._tt_stop.is_set():
+                    if not self._tt_stop.is_set() and _is_signing_rate_limit(exc):
+                        # This is an account-level signing quota, not a transient
+                        # websocket failure. Reconnecting immediately only repeats
+                        # the rejected request and can consume more quota.
+                        rate_limited = True
+                        self.last_error = (
+                            "Serwer podpisujący EulerStream odrzucił połączenie z powodu limitu "
+                            "połączeń na godzinę (rate_limit_account_hour). Automatyczne próby "
+                            "wstrzymano. Skonfiguruj SIGN_API_KEY z EulerStream albo spróbuj "
+                            "ponownie po odnowieniu limitu."
+                        )
+                        self.connection_state = "error"
+                        self.retry_in = 0.0
+                        diagnostics.error("%s Szczegóły odpowiedzi: %s", self.last_error, exc)
+                    elif not self._tt_stop.is_set():
                         self.connection_state = "reconnecting"
                         diagnostics.error("Połączenie TikTok LIVE nie powiodło się: %s", self.last_error, exc_info=exc)
                 finally:
@@ -340,7 +361,7 @@ class TikTokConnector:
                         except Exception as cleanup_error:
                             if not self._tt_stop.is_set():
                                 diagnostics.warning("Sprzątanie sesji TikTokLive: %s", cleanup_error)
-                if self._tt_stop.is_set():
+                if self._tt_stop.is_set() or rate_limited:
                     break
                 self.retry_attempt += 1
                 delay = min(60.0, float(2 ** min(self.retry_attempt, 6)))

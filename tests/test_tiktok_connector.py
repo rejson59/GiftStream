@@ -2,7 +2,16 @@ import asyncio
 import threading
 
 from app.diagnostics import _redact
-from app.tiktok_connector import TikTokConnector
+from app.tiktok_connector import TikTokConnector, _is_signing_rate_limit
+
+
+def test_signing_account_hour_limit_is_classified_as_non_retryable():
+    class SignatureRateLimitError(Exception):
+        pass
+
+    assert _is_signing_rate_limit(SignatureRateLimitError("too many connections"))
+    assert _is_signing_rate_limit(RuntimeError("rate_limit_account_hour"))
+    assert not _is_signing_rate_limit(ConnectionError("websocket closed"))
 
 
 def test_connection_start_is_idempotent_while_client_is_connecting():
