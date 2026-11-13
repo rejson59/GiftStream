@@ -22,7 +22,10 @@ def test_ready_game_presets_are_complete_and_have_unique_ids():
     assert len(set(preset_ids)) == len(preset_ids)
     assert all(game["rules"] for game in ready)
     assert get_game("giftstream-zombie-arena")["game_url"] == "/game"
-    assert get_game("minecraft-parkour")["integration"] == "ServerTap"
+    assert get_game("minecraft-parkour")["integration"] == "GiftStream Local Minecraft"
+    assert {rule["action"]["type"] for rule in get_game("minecraft-parkour")["rules"]} >= {
+        "parkour_level_forward", "parkour_level_back", "parkour_jail", "parkour_reset", "parkour_antireset"
+    }
     for game in ready:
         preset = Preset(id=game["preset_id"], name=game["title"], rules=game["rules"])
         assert preset.rules

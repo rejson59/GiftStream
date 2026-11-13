@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -20,7 +21,7 @@ from app import update_state
 from app.main import app
 from app.paths import data_dir, installed_release_tag
 from app.shortcuts import create_start_menu_shortcut
-from app.updater import prepare_latest
+from app.updater import current_install, prepare_latest
 from app.version import RELEASE_TAG
 
 GITHUB_REPOSITORY = os.environ.get("GIFTSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
@@ -96,6 +97,9 @@ class GiftStreamDesktop:
                     if updated and tag != self.current_tag:
                         create_start_menu_shortcut(executable)
                         _publish_downloaded_update(tag, executable)
+                        # Updates are verified before installation; automatically hand over to the new build.
+                        if self._apply_update(executable):
+                            return
                 except Exception as exc:
                     # Network trouble must never interrupt the running stream or UI.
                     message = f"Nie udało się sprawdzić aktualizacji: {exc}"
@@ -172,33 +176,36 @@ class GiftStreamDesktop:
 
 
 def _start_installed_version_if_needed() -> bool:
-    """Self-update this app before showing its UI, then point Start Menu at it."""
-    if not getattr(sys, "frozen", False) or os.name != "nt":
+    """Do only local installation work before opening the UI; network checks run later."""
+    if not getattr(sys, "frozen", False) or not IS_WINDOWS:
         return False
 
     running_executable = Path(sys.executable).resolve()
-    try:
-        _tag, latest_executable, _updated, _message = prepare_latest(
-            GITHUB_REPOSITORY,
-            data_dir(),
-            running_executable=running_executable,
-            running_tag=RELEASE_TAG,
-        )
-    except Exception:
-        # A first launch without network still runs the executable the user opened.
-        create_start_menu_shortcut(running_executable)
+    root = data_dir()
+    cached = current_install(root)
+    cached_version = tuple(int(part) for part in re.findall(r"\d+", cached[0])[:3]) if cached else ()
+    running_version = tuple(int(part) for part in re.findall(r"\d+", RELEASE_TAG)[:3])
+    if cached and cached_version > running_version:
+        # A previously downloaded update is already verified; prefer it without waiting on internet.
+        latest_executable = cached[1].resolve()
+        create_start_menu_shortcut(latest_executable)
+        if latest_executable != running_executable:
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            try:
+                subprocess.Popen([str(latest_executable)], cwd=str(root), creationflags=flags, close_fds=True)
+                return True
+            except OSError:
+                return False
         return False
 
-    create_start_menu_shortcut(latest_executable)
-    if latest_executable.resolve() == running_executable:
-        return False
-
-    flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    # Keep launch fast: do not duplicate a large one-file executable before rendering the UI.
+    # The initial binary runs directly; checksum-verified updates are cached in the background.
+    shortcut_target = cached[1].resolve() if cached and cached_version == running_version else running_executable
     try:
-        subprocess.Popen([str(latest_executable)], cwd=str(data_dir()), creationflags=flags, close_fds=True)
-        return True
+        create_start_menu_shortcut(shortcut_target)
     except OSError:
-        return False
+        pass
+    return False
 
 
 def main() -> None:

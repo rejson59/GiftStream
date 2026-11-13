@@ -5,6 +5,27 @@ from app.bridge import Hub
 from app.models import TikTokEvent
 
 
+def test_refresh_usd_pln_persists_official_nbp_rate_and_date(tmp_path, monkeypatch):
+    import io
+    import json
+
+    monkeypatch.setattr(earnings, "SETTINGS_PATH", tmp_path / "earnings.json")
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    payload = {"rates": [{"mid": 3.9876, "effectiveDate": "2026-11-10"}]}
+    monkeypatch.setattr(earnings.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(json.dumps(payload).encode()))
+    settings = earnings.refresh_usd_to_pln()
+    assert settings["usd_to_pln"] == 3.9876
+    assert settings["usd_to_pln_updated"] == "2026-11-10"
+    assert settings["rate_source"] == "NBP · kurs średni USD/PLN"
+
+
 def test_estimate_uses_configurable_usd_rate_and_exchange_rate():
     settings = {"usd_per_diamond": 0.005, "usd_to_pln": 4.0}
     assert earnings.estimate_pln(10, settings) == 0.2

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ipaddress
 import os
 import secrets
 import time
@@ -10,6 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
@@ -25,6 +27,7 @@ from .engine import Engine
 from .gifts import list_gifts, record_event, refresh_tiktok_catalog
 from .games import GAMES, get_game
 from .minecraft import ServerTapClient, validate_base_url
+from .parkour_server import ParkourServer
 from .models import AppConfig, GameAction, Preset, TikTokEvent
 from .paths import bundle_root, data_dir, installed_release_tag
 from .tiktok_connector import TikTokConnector
@@ -65,7 +68,7 @@ class PresetCopyRequest(BaseModel):
 
 class EarningsSettingsRequest(BaseModel):
     usd_per_diamond: float = Field(gt=0, le=1)
-    usd_to_pln: float = Field(gt=0, le=100)
+    usd_to_pln: float | None = Field(default=None, gt=0, le=100)
 
 
 class MinecraftSettingsRequest(BaseModel):
@@ -75,9 +78,25 @@ class MinecraftSettingsRequest(BaseModel):
     enabled: bool = False
 
 
+class ParkourSetupRequest(BaseModel):
+    server_dir: str = ""
+    player: str
+    eula_accepted: bool = False
+
+
+class ParkourActionRequest(BaseModel):
+    action: str
+    player: str | None = None
+
+
 async def publish_game_action(action: GameAction) -> None:
     await hub.publish_action(action)
-    if config.minecraft_enabled:
+    if action.action.startswith("parkour_"):
+        try:
+            await _run_parkour_action(action)
+        except Exception as exc:
+            await hub.publish_status({"parkour_result": {"ok": False, "message": str(exc)}})
+    if config.minecraft_enabled and not action.action.startswith("parkour_"):
         try:
             result = await minecraft_bridge.send(action.action, action.params)
             await hub.publish_status({"minecraft_result": result})
@@ -87,6 +106,75 @@ async def publish_game_action(action: GameAction) -> None:
 
 hub = Hub()
 minecraft_bridge = ServerTapClient()
+parkour_server = ParkourServer()
+parkour_reset_task: asyncio.Task | None = None
+parkour_reset_player = ""
+parkour_jail_tasks: dict[str, asyncio.Task] = {}
+
+
+async def _run_parkour_action(action: GameAction) -> None:
+    global parkour_reset_task, parkour_reset_player
+    settings = parkour_server.settings()
+    if not settings.get("enabled"):
+        return
+    player = str(action.params.get("player") or settings.get("player") or "")
+    if action.action == "parkour_reset":
+        if parkour_reset_task and not parkour_reset_task.done():
+            parkour_reset_task.cancel()
+        await asyncio.to_thread(parkour_server.start_reset, player)
+        parkour_reset_player = player
+        async def countdown() -> None:
+            global parkour_reset_task, parkour_reset_player
+            try:
+                for remaining in range(60, 0, -1):
+                    await hub.publish_status({"parkour_reset_countdown": remaining, "parkour_player": player})
+                    try:
+                        await asyncio.to_thread(parkour_server.update_reset_countdown, player, remaining)
+                    except Exception:
+                        # Preserve the countdown if the player is temporarily offline.
+                        pass
+                    await asyncio.sleep(1)
+                result = await asyncio.to_thread(parkour_server.finish_reset, player)
+                await hub.publish_status({"parkour_reset_countdown": 0, "parkour_result": result})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await hub.publish_status({"parkour_reset_countdown": None, "parkour_result": str(exc)})
+            finally:
+                parkour_reset_task = None
+        parkour_reset_task = asyncio.create_task(countdown())
+        return
+    if action.action == "parkour_antireset":
+        if parkour_reset_task and not parkour_reset_task.done():
+            parkour_reset_task.cancel()
+            parkour_reset_task = None
+            result = await asyncio.to_thread(parkour_server.cancel_reset, parkour_reset_player or player)
+            await hub.publish_status({"parkour_reset_countdown": None, "parkour_result": result})
+        return
+    if action.action == "parkour_jail":
+        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player)
+        previous = parkour_jail_tasks.pop(player, None)
+        if previous and not previous.done():
+            previous.cancel()
+        async def release_jail() -> None:
+            try:
+                await asyncio.sleep(20)
+                released = await asyncio.to_thread(parkour_server.release_jail, player)
+                await hub.publish_status({"parkour_result": released})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await hub.publish_status({"parkour_result": str(exc)})
+            finally:
+                parkour_jail_tasks.pop(player, None)
+        parkour_jail_tasks[player] = asyncio.create_task(release_jail())
+        await hub.publish_status({"parkour_result": result, "parkour_jail_seconds": 20})
+        return
+    if action.action.startswith("parkour_"):
+        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player)
+        await hub.publish_status({"parkour_result": result})
+
+
 engine = Engine(on_action=publish_game_action)
 
 
@@ -106,6 +194,28 @@ async def process_event(ev: TikTokEvent) -> None:
 connector = TikTokConnector(process_event)
 _catalog_refresh_task: asyncio.Task | None = None
 _catalog_refresh_started = False
+_gift_refresh_loop_task: asyncio.Task | None = None
+_currency_refresh_task: asyncio.Task | None = None
+
+
+async def _currency_refresh_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(earnings_tracker.refresh_usd_to_pln)
+        except Exception:
+            # Keep the last successful NBP rate and never delay application startup.
+            pass
+        await asyncio.sleep(12 * 60 * 60)
+
+
+async def _gift_catalog_refresh_loop() -> None:
+    while True:
+        await asyncio.sleep(24 * 60 * 60)
+        try:
+            await asyncio.to_thread(_refresh_catalog_safely)
+        except Exception:
+            # Retain the last cached gift catalog if TikTok or the network is unavailable.
+            pass
 
 
 def read_config() -> AppConfig:
@@ -146,7 +256,7 @@ def _refresh_catalog_safely() -> int:
 
 @app.on_event("startup")
 async def startup() -> None:
-    global config, _catalog_refresh_task, _catalog_refresh_started
+    global config, _catalog_refresh_task, _catalog_refresh_started, _currency_refresh_task, _gift_refresh_loop_task
     preset_store.ensure_default()
     config = read_config()
     sync_minecraft_client()
@@ -155,6 +265,10 @@ async def startup() -> None:
     if not _catalog_refresh_started:
         _catalog_refresh_started = True
         _catalog_refresh_task = asyncio.create_task(asyncio.to_thread(_refresh_catalog_safely))
+    if _gift_refresh_loop_task is None or _gift_refresh_loop_task.done():
+        _gift_refresh_loop_task = asyncio.create_task(_gift_catalog_refresh_loop())
+    if _currency_refresh_task is None or _currency_refresh_task.done():
+        _currency_refresh_task = asyncio.create_task(_currency_refresh_loop())
     if config.mode == "simulator":
         await connector.start("simulator")
 
@@ -162,6 +276,21 @@ async def startup() -> None:
 @app.on_event("shutdown")
 async def shutdown() -> None:
     await connector.stop()
+    global parkour_reset_task
+    if parkour_reset_task and not parkour_reset_task.done():
+        parkour_reset_task.cancel()
+    for task in parkour_jail_tasks.values():
+        if not task.done():
+            task.cancel()
+    if parkour_server.settings():
+        try:
+            await asyncio.to_thread(parkour_server.stop)
+        except Exception:
+            pass
+    if _currency_refresh_task and not _currency_refresh_task.done():
+        _currency_refresh_task.cancel()
+    if _gift_refresh_loop_task and not _gift_refresh_loop_task.done():
+        _gift_refresh_loop_task.cancel()
 
 
 # -- Web app ---------------------------------------------------------------
@@ -274,6 +403,22 @@ async def get_config() -> dict:
 @app.put("/api/config")
 async def update_config(data: dict[str, Any]) -> dict:
     global config
+    if "sound_url" in data:
+        url = str(data["sound_url"] or "").strip()
+        if url:
+            parsed = urlparse(url)
+            hostname = (parsed.hostname or "").lower().rstrip(".")
+            try:
+                ip = ipaddress.ip_address(hostname)
+                unsafe_ip = ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            except ValueError:
+                unsafe_ip = False
+            if (len(url) > 2048 or parsed.scheme != "https" or not hostname or
+                    parsed.username or parsed.password or unsafe_ip or
+                    hostname in {"localhost", "metadata.google.internal"} or
+                    hostname.endswith((".localhost", ".local", ".internal"))):
+                raise HTTPException(422, "Dźwięk musi wskazywać publiczny adres HTTPS bez danych logowania ani adresu lokalnego.")
+        data["sound_url"] = url
     merged = {**config.model_dump(), **data}
     try:
         config = AppConfig(**merged)
@@ -293,12 +438,20 @@ async def refresh_gifts() -> dict:
     return {"ok": count > 0, "count": count, "gifts": list_gifts()}
 
 @app.get("/api/earnings/settings")
-async def get_earnings_settings() -> dict[str, float]:
+async def get_earnings_settings() -> dict[str, Any]:
     return earnings_tracker.get_settings()
 
 @app.put("/api/earnings/settings")
-async def update_earnings_settings(req: EarningsSettingsRequest) -> dict[str, float]:
+async def update_earnings_settings(req: EarningsSettingsRequest) -> dict[str, Any]:
     return earnings_tracker.save_settings(req.usd_per_diamond, req.usd_to_pln)
+
+@app.post("/api/earnings/refresh-rate")
+async def refresh_earnings_rate() -> dict[str, Any]:
+    try:
+        return {"ok": True, "settings": await asyncio.to_thread(earnings_tracker.refresh_usd_to_pln)}
+    except Exception as exc:
+        return {"ok": False, "settings": earnings_tracker.get_settings(),
+                "message": f"Nie udało się pobrać najnowszego kursu NBP: {exc}"}
 
 @app.get("/api/games")
 async def games() -> list[dict]:
@@ -357,6 +510,55 @@ async def test_minecraft_connection() -> dict:
     except httpx.RequestError as exc:
         return {"ok": False, "message": f"Nie udało się połączyć z ServerTap: {exc}"}
 
+@app.get("/api/minecraft/parkour")
+async def parkour_status() -> dict[str, Any]:
+    status = await asyncio.to_thread(parkour_server.status)
+    status["enabled"] = bool(parkour_server.settings().get("enabled"))
+    return status
+
+@app.post("/api/minecraft/parkour/setup")
+async def parkour_setup(req: ParkourSetupRequest) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(parkour_server.setup, req.server_dir, req.player, req.eula_accepted)
+    except (ValueError, FileExistsError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+@app.post("/api/minecraft/parkour/start")
+async def parkour_start() -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(parkour_server.start)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+@app.post("/api/minecraft/parkour/stop")
+async def parkour_stop() -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(parkour_server.stop)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+@app.put("/api/minecraft/parkour/enabled")
+async def parkour_enabled(request: dict[str, bool]) -> dict[str, Any]:
+    state = parkour_server.settings()
+    if not state.get("server_dir"):
+        raise HTTPException(400, "Najpierw skonfiguruj lokalny serwer parkour.")
+    state["enabled"] = bool(request.get("enabled", False))
+    path = DATA / "minecraft_parkour.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    temporary.replace(path)
+    return {**await asyncio.to_thread(parkour_server.status), "enabled": state["enabled"]}
+
+@app.post("/api/minecraft/parkour/action")
+async def parkour_test_action(req: ParkourActionRequest) -> dict[str, Any]:
+    allowed = {"parkour_level_forward", "parkour_level_back", "parkour_jail", "parkour_reset", "parkour_antireset"}
+    if req.action not in allowed:
+        raise HTTPException(400, "Nieznana akcja parkour.")
+    await _run_parkour_action(GameAction(action=req.action, params={"player": req.player} if req.player else {}))
+    return {"ok": True, "message": f"Akcja parkour wysłana: {req.action}"}
+
 @app.get("/api/actions")
 async def actions() -> list[dict]:
     from .models import KNOWN_ACTIONS
@@ -367,6 +569,9 @@ async def actions() -> list[dict]:
               "speed_boost":"Przyspieszenie", "teleport":"Teleport", "spawn_wall":"Stwórz przeszkodę",
               "change_weather":"Zmień pogodę", "change_time":"Zmień porę dnia", "screen_shake":"Trzęsienie ekranu",
               "confetti":"Konfetti", "vote":"Głosowanie", "custom":"Akcja własna"}
+    labels.update({"parkour_level_forward":"Parkour: kolejny poziom", "parkour_level_back":"Parkour: poprzedni poziom",
+                   "parkour_jail":"Parkour: więzienie", "parkour_reset":"Parkour: reset za 60 s",
+                   "parkour_antireset":"Parkour: anty-reset"})
     return [{"id": x, "label": labels.get(x, x.replace("_", " ").title())} for x in KNOWN_ACTIONS]
 
 @app.get("/api/presets")

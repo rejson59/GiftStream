@@ -4,12 +4,13 @@
 
 ## Co działa w MVP
 
-- Polski panel twórcy z aktywnością na żywo, statystykami i rankingiem wspierających; orientacyjne zarobki z giftów w PLN są liczone z diamentów eventu, edytowalnej stawki USD/diament i kursu USD/PLN. Kwota per gift pojawia się w aktywności i katalogu.
+- Polski panel twórcy z aktywnością na żywo, statystykami i rankingiem wspierających; orientacyjne zarobki z giftów w PLN są liczone z diamentów eventu, edytowalnej stawki USD/diament i automatycznie odświeżanego kursu USD/PLN z tabeli NBP. Kwota per gift pojawia się w aktywności i katalogu.
 - Presety i edytor reguł: prezent / próg polubień / obserwacja / słowo w komentarzu → akcja gry; gdzie TikTok udostępnia grafikę giftu, pokazujemy oryginalny obraz z jego CDN zamiast emoji.
 - Cooldowny, obsługa serii prezentów i oznaczenia akcji priorytetowych.
 - Symulator zdarzeń oraz nieoficjalny konektor TikTokLive i adapter zewnętrznego WebSocket API.
 - Gra demo „Arena zombie”, pięć gotowych presetów (w tym Minecraft: przetrwanie, parkour, arena i nocna horda) oraz wyszukiwalny katalog dodatkowych koncepcji gier.
-- Alerty prezentów i obserwacji: polska synteza mowy z systemowego WebView, dźwiękowy sygnał i regulacja głośności — bez zewnętrznych usług.
+- Alerty prezentów i obserwacji: polska synteza mowy, wbudowany sygnał albo własny bezpośredni publiczny URL HTTPS audio oraz regulacja głośności. Linki MyInstants działają tylko wtedy, gdy użytkownik ma dostęp do bezpośredniego pliku dźwięku; GiftStream nie korzysta z nieudokumentowanego API ani nie przegląda katalogu MyInstants.
+- Edytowalne nakładki browser-source dla OBS i TikTok LIVE Studio: legenda giftów, alerty oraz osobny panel streamera z szacunkowymi zarobkami, ostatnimi giftami i akcjami oraz liczbą widzów.
 - Integracja Minecraft **Paper / Spigot / Bukkit przez ServerTap**. Obsługuje ograniczony zestaw komend z allow-listy; konfiguracja w panelu Integracje.
 - Katalog dodatkowych koncepcji gier (m.in. Lethal Company, Phasmophobia, Sons of the Forest, 7 Days to Die, GTA V offline, Raft, Valheim i Roblox); te karty nie oznaczają gotowych integracji.
 - Biblioteka do 100 giftów z oryginalnymi grafikami z CDN TikToka, wyszukiwaniem i sortowaniem po popularności orientacyjnej albo cenie w monetach. Wartość monet płacą widzowie; diamenty są odrębną miarą nagród twórcy. Oferta i ceny mogą się różnić w aplikacji, regionie i kanale zakupu; ceny oznaczone „≈” są szacowane, jeśli katalog nie podaje bezpośrednio wartości monet. Obrazy pozostają na CDN TikToka, a GiftStream zapisuje wyłącznie adresy i metadane.
@@ -17,11 +18,11 @@
 
 ## Aplikacja Windows i automatyczne aktualizacje
 
-**GiftStream dla Windows to jeden samodzielny plik EXE.** Pobierz [GiftStream.exe](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream.exe) i uruchom go — osobny instalator ani launcher nie są potrzebne. Przy pierwszym uruchomieniu aplikacja zapisze swoją kopię w `%LOCALAPPDATA%\GiftStream`, utworzy skrót GiftStream w menu Start i uruchomi natywne okno z osadzonym WebView2. Python nie musi być zainstalowany; WebView2 musi być dostępny w Windows.
+**GiftStream dla Windows to jeden samodzielny plik EXE.** Pobierz [GiftStream.exe](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream.exe) i uruchom go — osobny instalator ani launcher nie są potrzebne. Przy pierwszym uruchomieniu aplikacja od razu otwiera natywne okno z osadzonym WebView2 i tworzy skrót GiftStream w menu Start; nie kopiuje dużego pliku EXE przed pokazaniem UI. Python nie musi być zainstalowany; WebView2 musi być dostępny w Windows.
 
 Aplikacja sprawdza aktualizacje podczas uruchamiania oraz co 30 minut i ma przycisk „Sprawdź aktualizacje”. Pobiera zweryfikowaną sumą SHA-256 kopię tego samego pliku GiftStream.exe. Jeśli pobranie zakończy się podczas pracy aplikacji Windows, nowa wersja uruchamia się automatycznie, a poprzednia zamyka. GiftStream może na chwilę przestać odbierać zdarzenia, a po restarcie może być potrzebne ponowne połączenie; sama transmisja TikTok nie jest zamykana. Dane aplikacji są przechowywane w `%LOCALAPPDATA%\GiftStream`. Nowa instalacja zaczyna z czystymi ustawieniami i nie importuje danych poprzednich wersji.
 
-Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z` i zawierają wyłącznie `GiftStream.exe` oraz plik sumy kontrolnej. Plik nie jest podpisany Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
+Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z`  i zawierają wyłącznie `GiftStream.exe` oraz plik sumy kontrolnej. Plik nie jest podpisany Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
 
 ## Uruchomienie deweloperskie
 
@@ -34,11 +35,11 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Otwórz `http://localhost:8000`. Domyślnie działa symulator. „Szybki test” wysyła przykładowy prezent; grę demo otworzysz w panelu. Adres nakładki OBS: `http://localhost:8000/overlay?template=grid` (dostępne też `list` i `minimal`).
+Otwórz `http://localhost:8000`. Domyślnie działa symulator. „Szybki test” wysyła przykładowy prezent; grę demo otworzysz w panelu. Nakładki browser-source działają w OBS i TikTok LIVE Studio: `/overlay?template=grid`, `list`, `minimal` albo `streamer`; panel streamera przyjmuje pola `earnings,gifts,actions,viewers` w parametrze `fields`.
 
 ## Minecraft
 
-Zainstaluj ServerTap na Paper/Spigot/Bukkit, włącz klucz API w konfiguracji wtyczki, a następnie w GiftStream przejdź do **Integracje → Minecraft przez ServerTap**. Wpisz bazowy adres, klucz oraz nick gracza; przetestuj i włącz integrację. Szczegółowa instrukcja: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+Dla serwerów Paper/Spigot/Bukkit skonfiguruj ServerTap w panelu **Minecraft przez ServerTap**. Dla dostarczonej mapy wybierz **Minecraft · Parkour 100 Levels** i użyj przycisku **Utwórz i uruchom serwer**; potrzebna jest Java wymagana przez manifest Mojang, Internet przy pierwszym pobraniu oraz akceptacja Minecraft EULA. Szczegóły i ograniczenia: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
 
 Komendy są budowane z allow-listy i ograniczane parametrami. Komentarz, nick widza ani treść eventu webhook nigdy nie są wykonywane jako polecenie konsoli Minecraft. Nie wystawiaj portu ServerTap publicznie bez ochrony.
 

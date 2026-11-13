@@ -105,6 +105,7 @@ class AppConfig(BaseModel):
     tts_voice: str = "pl-PL"
     sound_alerts: bool = False
     sound_volume: float = Field(default=0.55, ge=0.0, le=1.0)
+    sound_url: str = ""
     overlay_template: str = "grid"           # grid | list | minimal
     bridge_webhook_secret: str = ""
     simulator_interval_sec: float = 3.0
@@ -139,5 +140,6 @@ KNOWN_ACTIONS: list[str] = [
     "heal", "drop_diamond", "drop_item", "give_item",
     "move_left", "move_right", "jump", "shield", "speed_boost",
     "teleport", "spawn_wall", "change_weather", "change_time",
+    "parkour_level_forward", "parkour_level_back", "parkour_jail", "parkour_reset", "parkour_antireset",
     "screen_shake", "confetti", "vote", "custom",
 ]

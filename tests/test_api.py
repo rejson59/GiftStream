@@ -71,10 +71,11 @@ def test_gift_endpoint_accepts_supported_sort_orders():
 def test_earnings_rates_are_saved_and_validated(tmp_path, monkeypatch):
     monkeypatch.setattr(main.earnings_tracker, "SETTINGS_PATH", tmp_path / "earnings.json")
     client = TestClient(main.app)
-    assert client.get("/api/earnings/settings").json() == {"usd_per_diamond": 0.005, "usd_to_pln": 4.0}
+    assert {key: client.get("/api/earnings/settings").json()[key] for key in ("usd_per_diamond", "usd_to_pln")} == {"usd_per_diamond": 0.005, "usd_to_pln": 4.0}
     saved = client.put("/api/earnings/settings", json={"usd_per_diamond": 0.004, "usd_to_pln": 4.2})
     assert saved.status_code == 200
-    assert saved.json() == {"usd_per_diamond": 0.004, "usd_to_pln": 4.2}
+    assert saved.json()["usd_per_diamond"] == 0.004
+    assert saved.json()["usd_to_pln"] == 4.2
     assert client.get("/api/earnings/settings").json() == saved.json()
     assert client.put("/api/earnings/settings", json={"usd_per_diamond": 0, "usd_to_pln": 4}).status_code == 422
 
@@ -91,6 +92,11 @@ def test_live_audio_preferences_are_persisted_without_exposing_secrets(monkeypat
     assert response.json()["sound_volume"] == 0.7
     invalid = TestClient(main.app).put("/api/config", json={"sound_volume": 1.5})
     assert invalid.status_code == 422
+    assert TestClient(main.app).put("/api/config", json={"sound_url": "http://example.com/alert.mp3"}).status_code == 422
+    assert TestClient(main.app).put("/api/config", json={"sound_url": "https://localhost/alert.mp3"}).status_code == 422
+    saved_sound = TestClient(main.app).put("/api/config", json={"sound_url": "https://sounds.example.org/alert.mp3"})
+    assert saved_sound.status_code == 200
+    assert saved_sound.json()["sound_url"] == "https://sounds.example.org/alert.mp3"
 
 
 def test_update_check_can_be_requested_and_reports_completion():
