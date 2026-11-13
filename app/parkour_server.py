@@ -506,6 +506,8 @@ def _write_server_properties(path: Path, password: str) -> None:
         "rcon.port": "25575",
         "rcon.password": password,
         "online-mode": "true",
+        "white-list": "false",
+        "enforce-whitelist": "false",
         "gamemode": "adventure",
         "difficulty": "normal",
         "max-players": "8",
@@ -516,6 +518,33 @@ def _write_server_properties(path: Path, password: str) -> None:
         "enable-command-block": "true",
     }
     path.write_text("# GiftStream local parkour server settings\n" + "\n".join(f"{key}={value}" for key, value in values.items()) + "\n", encoding="utf-8")
+
+
+def _disable_server_whitelist(properties: Path) -> None:
+    """Keep the GiftStream's private localhost server joinable without whitelist setup."""
+    try:
+        lines = properties.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    overrides = {"white-list": "false", "enforce-whitelist": "false"}
+    seen: set[str] = set()
+    updated: list[str] = []
+    for line in lines:
+        key, sep, _value = line.partition("=")
+        if sep and key.strip() in overrides:
+            if key.strip() not in seen:
+                updated.append(f"{key.strip()}=false")
+                seen.add(key.strip())
+        else:
+            updated.append(line)
+    for key, value in overrides.items():
+        if key not in seen:
+            updated.append(f"{key}={value}")
+    if updated == lines:
+        return
+    temporary = properties.with_suffix(properties.suffix + ".tmp")
+    temporary.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    os.replace(temporary, properties)
 
 
 def _recv_packet(sock: socket.socket) -> tuple[int, int, str]:
@@ -686,6 +715,7 @@ class ParkourServer:
         jar = root / "server.jar"
         if not jar.is_file() or not (root / "eula.txt").is_file():
             raise RuntimeError("Najpierw utwórz lokalny serwer parkour.")
+        _disable_server_whitelist(root / "server.properties")
         if self._process is not None and self._process.poll() is None:
             return self.status()
         # The server is deliberately detached from the dashboard process. After a
@@ -786,6 +816,7 @@ class ParkourServer:
                     "server_address": "localhost:25565", "players_online": 0, "players": [],
                     **client_info,
                     "message": "Utwórz lokalny serwer i zaimportuj mapę 100 Levels."}
+        _disable_server_whitelist(Path(str(state.get("server_dir", ""))) / "server.properties")
         response = {"configured": True, "running": False, "ready": False,
                     "server_address": state.get("server_address", "localhost:25565"),
                     "server_dir": state.get("server_dir", ""), "player": state.get("player", ""),
@@ -818,6 +849,14 @@ class ParkourServer:
             return response
         try:
             listing = self._rcon("list", log_failure=False)
+            if self._last_status_ready is not True:
+                # Existing servers can retain whitelist=true from older properties.
+                # RCON runs as console, so disable it once they become reachable.
+                try:
+                    self._rcon("whitelist off", log_failure=False)
+                    diagnostics.info("Wyłączono whitelistę serwera Parkour; serwer jest lokalny i nie wymaga listy dostępu.")
+                except Exception as exc:
+                    diagnostics.warning("Nie udało się wyłączyć whitelisty przez RCON: %s", exc)
             player_match = re.search(r"There are (\d+) of a max of \d+ players online:(.*)", listing, re.IGNORECASE)
             players = [name.strip() for name in (player_match.group(2) if player_match else "").split(",") if name.strip()]
             response.update({"running": True, "ready": True,

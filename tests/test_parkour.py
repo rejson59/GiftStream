@@ -164,7 +164,7 @@ def test_start_detects_detached_server_after_giftstream_restart(monkeypatch, tmp
     monkeypatch.setattr("app.parkour_server._running_minecraft_clients", lambda: [])
     monkeypatch.setattr("app.parkour_server.shutil.which", lambda _name: pytest.fail("must not launch duplicate server"))
     status = server.start()
-    assert commands == ["list", "list"]
+    assert commands == ["list", "list", "whitelist off"]
     assert status["ready"] is True and status["players_online"] == 1
     assert status["players"] == ["Streamer"]
 
@@ -437,3 +437,41 @@ def test_status_does_not_probe_rcon_during_server_startup_grace(monkeypatch, tmp
     assert status["running"] is True
     assert status["ready"] is False
     assert "uruchamia świat" in status["message"]
+
+
+def test_server_properties_and_existing_install_disable_whitelist(tmp_path):
+    from app.parkour_server import _disable_server_whitelist, _write_server_properties
+
+    properties = tmp_path / "server.properties"
+    _write_server_properties(properties, "secret")
+    text = properties.read_text(encoding="utf-8")
+    assert "white-list=false" in text
+    assert "enforce-whitelist=false" in text
+
+    properties.write_text("motd=GiftStream\nwhite-list=true\nenforce-whitelist=true\n", encoding="utf-8")
+    _disable_server_whitelist(properties)
+    text = properties.read_text(encoding="utf-8")
+    assert "motd=GiftStream" in text
+    assert "white-list=false" in text
+    assert "enforce-whitelist=false" in text
+    assert "white-list=true" not in text
+
+
+def test_ready_existing_server_has_whitelist_disabled_through_rcon(monkeypatch, tmp_path):
+    from app import parkour_server
+
+    settings = tmp_path / "minecraft.json"
+    settings.write_text(json.dumps({"server_dir": str(tmp_path), "minecraft_version": "26.3",
+                                    "rcon_host": "127.0.0.1", "rcon_port": 25575,
+                                    "rcon_password": "secret"}), encoding="utf-8")
+    (tmp_path / "server.properties").write_text("white-list=true\n", encoding="utf-8")
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", settings)
+    monkeypatch.setattr(parkour_server, "_running_minecraft_clients", lambda: [])
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "_rcon", lambda command, **_kwargs: commands.append(command) or "There are 0 of a max of 8 players online:")
+
+    status = server.status()
+    assert status["ready"] is True
+    assert commands == ["list", "whitelist off"]
+    assert "white-list=false" in (tmp_path / "server.properties").read_text(encoding="utf-8")
