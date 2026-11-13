@@ -122,6 +122,7 @@ def test_start_detects_detached_server_after_giftstream_restart(monkeypatch, tmp
     monkeypatch.setattr("app.parkour_server.SETTINGS_PATH", settings)
     commands = []
     monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "There are 1 of a max of 8 players online: Streamer")
+    monkeypatch.setattr("app.parkour_server._running_minecraft_clients", lambda: [])
     monkeypatch.setattr("app.parkour_server.shutil.which", lambda _name: pytest.fail("must not launch duplicate server"))
     status = server.start()
     assert commands == ["list", "list"]
