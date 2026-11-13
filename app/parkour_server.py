@@ -21,9 +21,13 @@ from .paths import bundle_root, data_dir
 
 PLAYER_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 MAP_FILENAME = "100-levels-5229-v1.7.4.zip"
-MAP_VERSION = "26.2"
+MAP_VERSION = "26.2"  # Version the bundled world was prepared and tested against.
+VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 SETTINGS_PATH = data_dir() / "minecraft_parkour.json"
 MAX_SERVER_JAR_BYTES = 300 * 1024 * 1024
+_VERSION_CACHE: tuple[float, dict[str, Any]] | None = None
+_VERSION_CACHE_TTL = 600
+_VERSION_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
 
 
 def _map_archive() -> Path:
@@ -49,14 +53,59 @@ def map_level_areas(archive: Path | None = None) -> dict[int, tuple[int, int, in
     return result
 
 
-def _download_server_jar(server_dir: Path) -> tuple[Path, int]:
-    """Download Mojang's official 26.2 server jar and verify its published SHA-1."""
-    manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
-    with urllib.request.urlopen(urllib.request.Request(manifest_url, headers={"User-Agent": "GiftStream/1"}), timeout=15) as response:
-        manifest = json.loads(response.read().decode("utf-8"))
-    version = next((entry for entry in manifest.get("versions", []) if entry.get("id") == MAP_VERSION), None)
+def _version_manifest(force: bool = False) -> dict[str, Any]:
+    """Fetch/cache Mojang's authoritative release manifest (stable releases only)."""
+    global _VERSION_CACHE
+    now = time.monotonic()
+    if not force and _VERSION_CACHE and _VERSION_CACHE[0] > now:
+        return _VERSION_CACHE[1]
+    request = urllib.request.Request(VERSION_MANIFEST_URL, headers={"User-Agent": "GiftStream/1"})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        raw = response.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
+        raise RuntimeError("Manifest wersji Minecraft przekracza dozwolony rozmiar.")
+    manifest = json.loads(raw.decode("utf-8"))
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("versions"), list):
+        raise RuntimeError("Mojang zwrócił nieprawidłowy manifest wersji Minecraft.")
+    _VERSION_CACHE = (now + _VERSION_CACHE_TTL, manifest)
+    return manifest
+
+
+def minecraft_versions() -> dict[str, Any]:
+    manifest = _version_manifest()
+    releases = [
+        {"id": str(entry.get("id", "")), "release_time": str(entry.get("releaseTime", ""))}
+        for entry in manifest["versions"]
+        if isinstance(entry, dict) and entry.get("type") == "release"
+        and _VERSION_RE.fullmatch(str(entry.get("id", "")))
+    ]
+    latest = str(manifest.get("latest", {}).get("release", ""))
+    if not any(item["id"] == latest for item in releases):
+        raise RuntimeError("Nie udało się ustalić najnowszej stabilnej wersji Minecraft.")
+    # A manageable selector: newest 40 releases, always including the bundled-map version.
+    choices = releases[:40]
+    if not any(item["id"] == MAP_VERSION for item in choices):
+        bundled = next((item for item in releases if item["id"] == MAP_VERSION), None)
+        if bundled:
+            choices.append(bundled)
+    return {"latest": latest, "versions": choices, "map_version": MAP_VERSION}
+
+
+def _resolve_release(requested_version: str = "latest") -> tuple[str, dict[str, Any]]:
+    manifest = _version_manifest()
+    selected = str(manifest.get("latest", {}).get("release", "")) if requested_version == "latest" else requested_version
+    if not _VERSION_RE.fullmatch(selected):
+        raise ValueError("Wersja Minecraft musi być stabilnym wydaniem, np. 1.21.11.")
+    version = next((entry for entry in manifest["versions"]
+                    if isinstance(entry, dict) and entry.get("id") == selected and entry.get("type") == "release"), None)
     if not version:
-        raise RuntimeError(f"Nie znaleziono oficjalnego wydania Minecraft {MAP_VERSION}.")
+        raise ValueError(f"Wersja Minecraft {selected} nie jest dostępna w oficjalnym katalogu wydań.")
+    return selected, version
+
+
+def _download_server_jar(server_dir: Path, requested_version: str = "latest") -> tuple[Path, int, str]:
+    """Download a selected official release server jar and verify Mojang's SHA-1."""
+    selected, version = _resolve_release(requested_version)
     version_url = str(version.get("url", ""))
     version_host = urllib.parse.urlparse(version_url).hostname or ""
     if not version_url.startswith("https://") or not (version_host == "piston-meta.mojang.com" or version_host.endswith(".piston-meta.mojang.com")):
@@ -65,7 +114,7 @@ def _download_server_jar(server_dir: Path) -> tuple[Path, int]:
         version_info = json.loads(response.read().decode("utf-8"))
     required_java = int(version_info.get("javaVersion", {}).get("majorVersion", 0))
     if required_java < 1:
-        raise RuntimeError("Nie udało się odczytać wymagań wersji Java z manifestu Mojang.")
+        raise RuntimeError(f"Nie udało się odczytać wymagań Java dla Minecraft {selected}.")
     java_output = subprocess.run([shutil.which("java") or "java", "-version"], capture_output=True,
                                  text=True, timeout=5, check=False)
     java_text = (java_output.stderr or "") + (java_output.stdout or "")
@@ -74,7 +123,7 @@ def _download_server_jar(server_dir: Path) -> tuple[Path, int]:
         raise RuntimeError("Nie udało się rozpoznać zainstalowanej wersji Java.")
     installed_java = int(java_match.group(1))
     if installed_java < required_java:
-        raise RuntimeError(f"Minecraft {MAP_VERSION} wymaga Java {required_java} lub nowszej; wykryto Java {installed_java}.")
+        raise RuntimeError(f"Minecraft {selected} wymaga Java {required_java} lub nowszej; wykryto Java {installed_java}.")
     server = version_info.get("downloads", {}).get("server", {})
     url = str(server.get("url", ""))
     host = urllib.parse.urlparse(url).hostname or ""
@@ -86,13 +135,13 @@ def _download_server_jar(server_dir: Path) -> tuple[Path, int]:
     if len(jar) < 1024 or len(jar) > MAX_SERVER_JAR_BYTES:
         raise RuntimeError("Pobrany plik serwera Minecraft ma nieprawidłowy rozmiar.")
     expected_sha1 = str(server.get("sha1", "")).lower()
-    if expected_sha1 and hashlib.sha1(jar).hexdigest() != expected_sha1:
-        raise RuntimeError("Suma SHA-1 serwera Minecraft jest nieprawidłowa.")
+    if not expected_sha1 or hashlib.sha1(jar).hexdigest() != expected_sha1:
+        raise RuntimeError("Suma SHA-1 serwera Minecraft jest nieprawidłowa lub nie zgadza się.")
     destination = server_dir / "server.jar"
     temporary = destination.with_suffix(".jar.new")
     temporary.write_bytes(jar)
     os.replace(temporary, destination)
-    return destination, required_java
+    return destination, required_java, selected
 
 
 def _extract_map(archive: Path, destination: Path) -> None:
@@ -179,29 +228,38 @@ class ParkourServer:
         except (OSError, ValueError, TypeError):
             return {}
 
-    def setup(self, server_dir: str, player: str, eula_accepted: bool) -> dict[str, Any]:
+    def setup(self, server_dir: str, player: str, eula_accepted: bool, version: str = "latest") -> dict[str, Any]:
         if not eula_accepted:
             raise ValueError("Zaznacz akceptację EULA Minecraft przed utworzeniem serwera.")
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Wpisz nick Minecraft: 3–16 liter, cyfr lub podkreśleń.")
         if not shutil.which("java"):
             raise RuntimeError("Nie znaleziono Java. Zainstaluj wersję wymaganą przez serwer Minecraft i spróbuj ponownie.")
-        root = Path(server_dir).expanduser().resolve() if server_dir.strip() else (data_dir() / "MinecraftParkour").resolve()
+        selected_version, _version_info = _resolve_release(version)
+        if server_dir.strip():
+            root = Path(server_dir).expanduser().resolve()
+        else:
+            root = (data_dir() / "MinecraftParkour" / "servers" / selected_version).resolve()
         if root == Path(root.anchor) or root == data_dir().resolve():
             raise ValueError("Wybierz osobny folder na lokalny serwer Minecraft.")
-        root.mkdir(parents=True, exist_ok=True)
         state = self.settings()
-        if state.get("server_dir") == str(root) and (root / "server.jar").is_file() and (root / "world" / "level.dat").is_file():
+        if self._process is not None and self._process.poll() is None:
+            if state.get("server_dir") != str(root) or state.get("minecraft_version") != selected_version:
+                raise RuntimeError("Zatrzymaj działający serwer przed przełączeniem wersji Minecraft.")
+            return self.status()
+        root.mkdir(parents=True, exist_ok=True)
+        if (state.get("server_dir") == str(root) and state.get("minecraft_version") == selected_version
+                and (root / "server.jar").is_file() and (root / "world" / "level.dat").is_file()):
             self.start()
             return self.status()
         if any(root.iterdir()):
-            raise FileExistsError("Wybrany folder nie jest pusty. Wybierz nowy folder, aby nie nadpisać istniejących danych.")
+            raise FileExistsError("Folder wybranej wersji nie jest pusty. Dane świata są chronione — wybierz inny folder lub wersję.")
 
         password = secrets.token_urlsafe(24)
         map_stage = root / ".giftstream-world-stage"
         try:
             _map_archive()  # Fail before downloading server files if the bundled world is absent.
-            jar, required_java = _download_server_jar(root)
+            jar, required_java, installed_version = _download_server_jar(root, selected_version)
             map_stage.mkdir()
             _extract_map(_map_archive(), map_stage)
             os.replace(map_stage / "100 Levels", root / "world")
@@ -209,8 +267,8 @@ class ParkourServer:
             _write_server_properties(root / "server.properties", password)
             state = {"server_dir": str(root), "player": player,
                      "rcon_host": "127.0.0.1", "rcon_port": 25575,
-                     "server_address": "127.0.0.1:25565", "map_version": MAP_VERSION,
-                     "java_required": required_java, "server_jar": str(jar)}
+                     "server_address": "localhost:25565", "minecraft_version": installed_version,
+                     "map_version": MAP_VERSION, "java_required": required_java, "server_jar": str(jar)}
             SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
             tmp = SETTINGS_PATH.with_suffix(".json.tmp")
             tmp.write_text(json.dumps({**state, "rcon_password": password}, indent=2), encoding="utf-8")
@@ -277,19 +335,27 @@ class ParkourServer:
         state = self.settings()
         if not state:
             return {"configured": False, "running": False, "ready": False,
+                    "server_address": "localhost:25565", "players_online": 0, "players": [],
                     "message": "Utwórz lokalny serwer i zaimportuj mapę 100 Levels."}
         response = {"configured": True, "running": False, "ready": False,
-                    "server_address": state.get("server_address", "127.0.0.1:25565"),
+                    "server_address": state.get("server_address", "localhost:25565"),
                     "server_dir": state.get("server_dir", ""), "player": state.get("player", ""),
+                    "minecraft_version": state.get("minecraft_version", MAP_VERSION),
                     "map_version": state.get("map_version", MAP_VERSION),
+                    "java_required": state.get("java_required"),
                     "chat_relay_enabled": bool(state.get("chat_relay_enabled", False)),
+                    "players_online": 0, "players": [],
                     "message": "Serwer startuje — pierwsze uruchomienie może potrwać chwilę."}
         if self._process is not None and self._process.poll() is not None:
             response["message"] = f"Serwer zakończył pracę (kod {self._process.returncode}). Zajrzyj do giftstream-server.log."
             return response
         try:
             listing = self._rcon("list")
+            player_match = re.search(r"There are (\d+) of a max of \d+ players online:(.*)", listing, re.IGNORECASE)
+            players = [name.strip() for name in (player_match.group(2) if player_match else "").split(",") if name.strip()]
             response.update({"running": True, "ready": True,
+                             "players_online": int(player_match.group(1)) if player_match else len(players),
+                             "players": players,
                              "message": "Minecraft gotowy · " + (listing or "RCON połączony")})
         except Exception:
             if self._process is not None and self._process.poll() is None:

@@ -25,7 +25,7 @@ from .bridge import Hub
 from .engine import Engine
 from .gifts import coin_price_for_gift, list_gifts, record_event, refresh_tiktok_catalog
 from .games import get_game
-from .parkour_server import ParkourServer
+from .parkour_server import ParkourServer, minecraft_versions
 from .models import AppConfig, GameAction, Preset, TikTokEvent
 from .paths import bundle_root, data_dir, installed_release_tag
 from .tiktok_connector import TikTokConnector
@@ -69,6 +69,7 @@ class ParkourSetupRequest(BaseModel):
     server_dir: str = ""
     player: str
     eula_accepted: bool = False
+    version: str = "latest"
 
 
 class ParkourActionRequest(BaseModel):
@@ -497,6 +498,13 @@ async def refresh_earnings_rate() -> dict[str, Any]:
         return {"ok": False, "settings": earnings_tracker.get_settings(),
                 "message": f"Nie udało się pobrać najnowszego kursu NBP: {exc}"}
 
+@app.get("/api/minecraft/versions")
+async def minecraft_version_options() -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(minecraft_versions)
+    except Exception as exc:
+        raise HTTPException(502, f"Nie udało się pobrać wersji Minecraft z manifestu Mojang: {exc}") from exc
+
 @app.get("/api/minecraft/parkour")
 async def parkour_status() -> dict[str, Any]:
     settings = parkour_server.settings()
@@ -508,7 +516,7 @@ async def parkour_status() -> dict[str, Any]:
 @app.post("/api/minecraft/parkour/setup")
 async def parkour_setup(req: ParkourSetupRequest) -> dict[str, Any]:
     try:
-        return await asyncio.to_thread(parkour_server.setup, req.server_dir, req.player, req.eula_accepted)
+        return await asyncio.to_thread(parkour_server.setup, req.server_dir, req.player, req.eula_accepted, req.version)
     except (ValueError, FileExistsError) as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:

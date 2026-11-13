@@ -26,6 +26,14 @@ def test_builtin_parkour_preset_migrates_only_when_untouched(monkeypatch):
     assert saved == []
 
 
+def test_minecraft_versions_endpoint_returns_official_release_choices(monkeypatch):
+    monkeypatch.setattr(main, "minecraft_versions", lambda: {"latest": "26.3", "versions": [{"id": "26.3"}], "map_version": "26.2"})
+    response = TestClient(main.app).get("/api/minecraft/versions")
+    assert response.status_code == 200
+    assert response.json()["latest"] == "26.3"
+    assert response.json()["versions"] == [{"id": "26.3"}]
+
+
 def test_statistics_endpoints_clear_history_or_reset_session_totals(monkeypatch, tmp_path):
     from app import bridge
 

@@ -69,13 +69,15 @@
         <div class="panel minecraft-panel parkour-setup-panel">
           <div class="panel-head"><div><div class="panel-title">Minecraft · Parkour 100 Levels <span class="pill pill-muted" id="parkour-pill">NIEGOTOWY</span></div><div class="panel-sub">GiftStream pobierze oficjalny serwer i uruchomi dołączoną mapę lokalnie.</div></div></div>
           <div class="minecraft-form parkour-form">
+            <label><span>WERSJA SERWERA MINECRAFT</span><select id="parkour-version" class="form-input"><option value="latest">Najnowsza stabilna · sprawdzam…</option></select></label>
             <label><span>NICK GRACZA</span><input id="parkour-player" placeholder="TwojNick" maxlength="16" autocomplete="off"></label>
             <label class="mc-toggle"><input id="parkour-eula" type="checkbox"><span>Akceptuję <a href="https://www.minecraft.net/eula" target="_blank" rel="noopener">Minecraft EULA</a> i zasady Mojang/Microsoft</span></label>
             <label class="mc-toggle"><input id="parkour-enabled" type="checkbox" disabled><span>Wysyłaj akcje presetu parkour do lokalnej gry</span></label>
             <label class="mc-toggle"><input id="parkour-chat-relay" type="checkbox" disabled><span>Opcjonalnie: przekazuj komentarze TikTok LIVE do czatu Minecraft bez zmian</span></label>
           </div>
-          <div class="mc-actions"><button class="button button-primary" id="parkour-setup">Utwórz i uruchom serwer <span>→</span></button><button class="button button-secondary" id="parkour-start" disabled>Uruchom</button><button class="button button-secondary" id="parkour-stop" disabled>Zatrzymaj</button><span id="parkour-status" class="mc-status">Wymaga zgodnej wersji Java; pierwsza konfiguracja pobiera serwer. Adres: localhost:25565.</span></div>
-          <div class="mc-footnote">Serwer nasłuchuje tylko na 127.0.0.1; RCON również pozostaje lokalny. Mapa działa jako datapack w serwerze vanilla, bez dodatkowych pluginów. Wymagane są Minecraft EULA, zgodna Java i co najmniej 2 GB pamięci. Mapa: 100 Levels v1.7.4 (Minecraft 26.2). <a href="/docs/minecraft" target="_blank" class="text-button">Szczegóły konfiguracji ↗</a></div>
+          <div class="mc-actions"><button class="button button-primary" id="parkour-setup">Utwórz i uruchom serwer <span>→</span></button><button class="button button-secondary" id="parkour-start" disabled>Uruchom</button><button class="button button-secondary" id="parkour-stop" disabled>Zatrzymaj</button><span id="parkour-status" class="mc-status">Wymaga zgodnej wersji Java; pierwsza konfiguracja pobiera serwer.</span></div>
+          <div class="mc-join-bar"><div><span class="mc-join-label">ADRES DOŁĄCZENIA</span><code id="parkour-address">localhost:25565</code><span id="parkour-players" class="mc-player-count">Serwer lokalny · 0 graczy</span></div><button class="button button-secondary" id="copy-parkour-address" type="button">Kopiuj adres</button></div>
+          <div class="mc-footnote">Wybierz najnowszą stabilną wersję albo jedną z ostatnich wydań. Serwer nasłuchuje wyłącznie na tym komputerze (localhost); RCON również pozostaje lokalny. Inna wersja niż <span id="parkour-map-version">mapa 26.2</span> może wymagać zgodności datapacka. Świat każdej wersji jest przechowywany osobno. Wymagane są Minecraft EULA, zgodna Java i co najmniej 2 GB pamięci. <a href="/docs/minecraft" target="_blank" class="text-button">Szczegóły konfiguracji ↗</a></div>
         </div>
       </section>
   <span>"action"</span>: <em>"spawn_zombie"</em>,

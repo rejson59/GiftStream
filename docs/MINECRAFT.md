@@ -4,17 +4,19 @@ GiftStream's only built-in game flow is a local Minecraft Parkour server using t
 
 ## One-click setup
 
-In **Minecraft Parkour**, enter your Minecraft nickname, read and accept the Minecraft EULA, then choose **Utwórz i uruchom serwer**. GiftStream uses its default data folder and refuses to overwrite an unrelated non-empty folder. On first setup it:
+In **Minecraft Parkour**, select **Najnowsza stabilna** or one of the recent official releases, enter your Minecraft nickname, read and accept the Minecraft EULA, then choose **Utwórz i uruchom serwer**. GiftStream queries Mojang's official version manifest; snapshots are not offered. Each selected release gets its own server and world folder, so switching versions does not overwrite another version's world. On first setup it:
 
-- downloads the official Minecraft 26.2 server JAR using Mojang's version manifest and checks the published SHA-1;
-- verifies that the installed Java version meets the requirement in the same manifest;
+- downloads the selected official Minecraft server JAR using Mojang's version manifest and verifies its published SHA-1;
+- resolves **Najnowsza stabilna** at setup time and checks that installed Java meets that release's requirement;
 - extracts the included 100 Levels world, which has map datapack regions for levels 1–100;
 - configures and starts the vanilla server bound only to `127.0.0.1:25565`;
 - creates a random RCON password and binds RCON only to `127.0.0.1`.
 
 The map works as a datapack and does not require a third-party plugin. The official Minecraft server is downloaded at setup time and is not bundled with GiftStream. Internet access and compatible Java are needed during setup. The server uses up to 2 GB of memory and the Minecraft EULA must be accepted by the user.
 
-When the server is ready, enable **Wysyłaj akcje presetu parkour do lokalnej gry** to allow gifts to trigger game actions. Use **Zatrzymaj** for a graceful shutdown. The log is `giftstream-server.log` in the server folder.
+When the server is ready, join from Minecraft Multiplayer using **`localhost:25565`** (or use **Kopiuj adres** in GiftStream). This server is intentionally reachable only from the same computer. The dashboard shows the selected Minecraft version and connected player count when RCON is ready. Enable **Wysyłaj akcje presetu parkour do lokalnej gry** to allow gifts to trigger game actions. Use **Zatrzymaj** for a graceful shutdown. The log is `giftstream-server.log` in that version's server folder.
+
+The bundled 100 Levels map was prepared for Minecraft **26.2**. Newer versions are offered so you can use the newest vanilla server, but the map datapack is not independently certified against every Minecraft release; choose the map-matched release for the most predictable behavior. The launcher checks the server download's hash and never overwrites a non-empty version folder.
 
 ## Preset and coin prices
 
