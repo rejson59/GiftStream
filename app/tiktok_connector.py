@@ -1,15 +1,4 @@
-"""GiftStream — konektor TikTok Live.
-
-Tryby:
-  1. "tiktok"    — nieoficjalna biblioteka TikTokLive (isaackogan/TikTokLive).
-                   Darmowa, łączy się po @username. Wymaga: pip install TikTokLive
-  2. "simulator" — generuje fałszywe eventy (prezenty, lajki, komentarze).
-                   Do testów bez TikToka i na produkcji jako fallback.
-  3. "managed"   — adapter pod płatne API (TikTool / EulerStream).
-                   Wypełnij klucze w .env — szkielet gotowy, patrz docs/TIKTOK.md.
-
-Wszystkie tryby emitują znormalizowane TikTokEvent -> Engine -> gra.
-"""
+"""GiftStream connectors for real TikTok LIVE and a configured external API."""
 from __future__ import annotations
 
 import asyncio
@@ -21,16 +10,10 @@ import threading
 import time
 from collections.abc import Awaitable, Callable
 
-from .models import GIFT_CATALOG, TikTokEvent
+from .models import TikTokEvent
 from . import diagnostics
 
 OnEvent = Callable[[TikTokEvent], Awaitable[None]]
-
-SIM_USERS = ["fan_kasia", "gamer_marek", "ola_live", "tomek_gra", "zuzia_tt",
-             "piotr_stream", "maja_pl", "kuba_plays", "ania_watch", "dawid_live"]
-SIM_COMMENTS = ["GG!", "boss!!", "dawaj!", "lecz się", "skacz w lewo", "heal pls",
-                "to jest super", "jeszcze jeden!", "OMG", "🔥🔥🔥", "boss", "pomocy"]
-
 
 def _is_signing_rate_limit(exc: Exception) -> bool:
     """Whether TikTokLive's upstream signing service explicitly rate-limited us."""
@@ -76,7 +59,7 @@ async def _disconnect_tiktok_client(client, close_http: bool = False) -> None:  
 class TikTokConnector:
     def __init__(self, on_event: OnEvent):
         self.on_event = on_event
-        self.mode = "simulator"
+        self.mode = "tiktok"
         self.username = ""
         self.connected = False
         self._task: asyncio.Task | None = None
@@ -107,12 +90,6 @@ class TikTokConnector:
         self.last_error = ""
         self.retry_attempt = 0
         self.retry_in = 0.0
-        if mode == "simulator":
-            self._task = asyncio.create_task(self._simulator_loop())
-            self.connected = True
-            self.connection_state = "connected"
-            diagnostics.info("Symulator zdarzeń został uruchomiony.")
-            return {"ok": True, "mode": mode, "message": "Symulator uruchomiony"}
         if mode == "tiktok":
             if not self.username or not re.fullmatch(r"[A-Za-z0-9._]{2,24}", self.username):
                 self.connection_state = "error"
@@ -187,50 +164,6 @@ class TikTokConnector:
         return {"mode": self.mode, "username": self.username, "connected": self.connected,
                 "state": self.connection_state, "last_error": self.last_error,
                 "retry_attempt": self.retry_attempt, "retry_in": retry_in}
-
-    # ------------------------------------------------------------------
-    # Symulator
-    # ------------------------------------------------------------------
-    async def _simulator_loop(self) -> None:
-        while not self._stop.is_set():
-            await asyncio.sleep(random.uniform(1.5, 4.5))
-            if self._stop.is_set():
-                break
-            roll = random.random()
-            user = random.choice(SIM_USERS)
-            if roll < 0.45:
-                gift = random.choice(GIFT_CATALOG)
-                ev = TikTokEvent(type="gift", user=user, nickname=user,
-                                 gift_name=gift["name"], gift_id=gift["id"],
-                                 diamonds=gift["diamonds"], source="simulator")
-            elif roll < 0.70:
-                ev = TikTokEvent(type="like", user=user, nickname=user,
-                                 like_count=random.randint(1, 10), source="simulator")
-            elif roll < 0.85:
-                ev = TikTokEvent(type="comment", user=user, nickname=user,
-                                 comment=random.choice(SIM_COMMENTS), source="simulator")
-            elif roll < 0.93:
-                ev = TikTokEvent(type="follow", user=user, nickname=user, source="simulator")
-            else:
-                ev = TikTokEvent(type="join", user=user, nickname=user, source="simulator")
-            await self.on_event(ev)
-
-    async def simulate_once(self, kind: str = "gift") -> TikTokEvent:
-        """Ręczny test: jeden event na żądanie (przyciski w dashboardzie)."""
-        user = random.choice(SIM_USERS)
-        if kind == "gift":
-            gift = random.choice(GIFT_CATALOG)
-            ev = TikTokEvent(type="gift", user=user, nickname=user, gift_name=gift["name"],
-                             gift_id=gift["id"], diamonds=gift["diamonds"], source="test")
-        elif kind == "like":
-            ev = TikTokEvent(type="like", user=user, nickname=user, like_count=10, source="test")
-        elif kind == "follow":
-            ev = TikTokEvent(type="follow", user=user, nickname=user, source="test")
-        else:
-            ev = TikTokEvent(type="comment", user=user, nickname=user,
-                             comment=random.choice(SIM_COMMENTS), source="test")
-        await self.on_event(ev)
-        return ev
 
     # ------------------------------------------------------------------
     # TikTokLive (nieoficjalna biblioteka)
@@ -489,7 +422,7 @@ class TikTokConnector:
 
         Wymaga klucza w .env: TIKTOOL_API_KEY. Jeśli klucz jest, łączymy
         się przez WebSocket i mapujemy eventy na TikTokEvent.
-        Bez klucza zwracamy instrukcję (fallback: symulator).
+        Bez klucza zwracamy czytelną instrukcję zamiast generować nieprawdziwe zdarzenia.
         """
         api_key = os.getenv("TIKTOOL_API_KEY", "")
         if not api_key:
@@ -497,8 +430,7 @@ class TikTokConnector:
             self.last_error = "Brak TIKTOOL_API_KEY w .env."
             diagnostics.warning(self.last_error)
             return {"ok": False,
-                    "message": "Brak TIKTOOL_API_KEY w .env. Ustaw klucz albo użyj trybu "
-                               "'tiktok' (TikTokLive) / 'simulator'."}
+                    "message": "Brak TIKTOOL_API_KEY w .env. Ustaw klucz albo połącz bezpośrednio TikTok LIVE."}
         if not self.username:
             return {"ok": False, "message": "Podaj @username streamera"}
         try:

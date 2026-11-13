@@ -121,23 +121,3 @@ class Engine:
             if self.on_action:
                 await self.on_action(ga)
         return actions
-
-    # -- testowanie ----------------------------------------------------------
-    async def test_rule(self, rule_id: str, ev: TikTokEvent | None = None) -> GameAction | None:
-        """Odpala pojedynczą regułę (przycisk 'Test' w dashboardzie)."""
-        preset = self.active_preset
-        if preset is None:
-            return None
-        rule = next((r for r in preset.rules if r.id == rule_id), None)
-        if rule is None:
-            return None
-        ev = ev or TikTokEvent(type="gift", gift_name=rule.trigger.gift_name or "Test",
-                               diamonds=rule.trigger.min_diamonds or 1, source="test")
-        ga = GameAction(action=rule.action.type,
-                        params={**rule.action.params, "interrupt": rule.interrupt,
-                                "alert_text": rule.alert_text or rule.name, "sound": rule.sound},
-                        triggered_by=ev, rule_name=rule.name, ts=time.time())
-        self.stats["actions"] += 1
-        if self.on_action:
-            await self.on_action(ga)
-        return ga

@@ -68,6 +68,8 @@ def test_setup_stores_each_minecraft_version_in_a_separate_world(tmp_path, monke
     latest = server.setup("", "Streamer", True, "26.3")
     latest_world = tmp_path / "MinecraftParkour" / "servers" / "26.3" / "world" / "level.dat"
     assert latest["minecraft_version"] == "26.3" and latest_world.read_bytes() == b"map data"
+    installed_modifier = json.loads((latest_world.parent / "datapacks/main/data/common/item_modifier/training_mode/glint/enable.json").read_text())
+    assert installed_modifier["type"] == "minecraft:set_components" and "function" not in installed_modifier
     assert old_world.exists()
 
 
@@ -140,7 +142,7 @@ def test_switching_versions_refuses_to_orphan_a_detached_live_server(monkeypatch
     monkeypatch.setattr(parkour_server, "SETTINGS_PATH", settings)
     monkeypatch.setattr(parkour_server, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(parkour_server, "_resolve_release", lambda version: (version, {}))
-    monkeypatch.setattr(server, "_rcon", lambda _command: "There are 1 of a max of 8 players online")
+    monkeypatch.setattr(server, "_rcon", lambda _command, **_kwargs: "There are 1 of a max of 8 players online")
     with pytest.raises(RuntimeError, match="Zatrzymaj"):
         server.setup("", "Streamer", True, "26.3")
     assert not (tmp_path / "MinecraftParkour" / "servers" / "26.3").exists()
@@ -158,7 +160,7 @@ def test_start_detects_detached_server_after_giftstream_restart(monkeypatch, tmp
                                                    "rcon_host": "127.0.0.1", "rcon_port": 25575}))
     monkeypatch.setattr("app.parkour_server.SETTINGS_PATH", settings)
     commands = []
-    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "There are 1 of a max of 8 players online: Streamer")
+    monkeypatch.setattr(server, "_rcon", lambda command, **_kwargs: commands.append(command) or "There are 1 of a max of 8 players online: Streamer")
     monkeypatch.setattr("app.parkour_server._running_minecraft_clients", lambda: [])
     monkeypatch.setattr("app.parkour_server.shutil.which", lambda _name: pytest.fail("must not launch duplicate server"))
     status = server.start()
@@ -197,7 +199,7 @@ def test_java_version_detection_and_candidate_selection(monkeypatch, tmp_path):
     java_21.touch(); java_25.touch()
     monkeypatch.setattr(parkour_server, "_java_candidates", lambda: [java_21, java_25])
     monkeypatch.setattr(parkour_server, "_java_major", lambda path: 21 if path == java_21 else 25)
-    assert parkour_server.find_java(21) == (java_25, 25)
+    assert parkour_server.find_java(21) == (java_21, 21)
     assert parkour_server.find_java(26) is None
 
 
@@ -273,7 +275,9 @@ def test_map_datapack_migration_fixes_modifier_json_and_adds_level_timer_hud(tmp
     glint.mkdir(parents=True)
     original = [{"function": "minecraft:set_components",
                  "components": {"minecraft:enchantment_glint_override": False}}]
-    (glint / "disable.json").write_text(json.dumps(original), encoding="utf-8")
+    # Repair the exact installed-world format left by 0.10.4: an unwrapped
+    # array element which still uses the invalid legacy `function` key.
+    (glint / "disable.json").write_text(json.dumps(original[0]), encoding="utf-8")
     original[0]["components"]["minecraft:enchantment_glint_override"] = True
     (glint / "enable.json").write_text(json.dumps(original), encoding="utf-8")
     timer = tmp_path / "datapacks/main/data/common/function/timer/display.mcfunction"
@@ -286,7 +290,8 @@ def test_map_datapack_migration_fixes_modifier_json_and_adds_level_timer_hud(tmp
     for name in ("disable", "enable"):
         resource = json.loads((glint / f"{name}.json").read_text(encoding="utf-8"))
         assert isinstance(resource, dict)
-        assert resource["function"] == "minecraft:set_components"
+        assert resource["type"] == "minecraft:set_components"
+        assert "function" not in resource
     line = timer.read_text(encoding="utf-8")
     assert line.count('"objective":"level"') == 1
     assert '"text":" / 100  ·  "' in line
@@ -329,7 +334,7 @@ def test_stop_after_app_restart_treats_refused_rcon_as_already_stopped(monkeypat
     server = ParkourServer()
     commands = []
 
-    def refused(command):
+    def refused(command, **_kwargs):
         commands.append(command)
         raise ConnectionRefusedError("connection refused")
 
@@ -407,3 +412,28 @@ def test_concurrent_start_requests_spawn_only_one_server_process(monkeypatch, tm
         results = list(pool.map(lambda _index: server.start(), range(2)))
     assert calls == ["spawn"]
     assert all(result["running"] and not result["ready"] for result in results)
+
+
+def test_status_does_not_probe_rcon_during_server_startup_grace(monkeypatch, tmp_path):
+    import time
+    from app import parkour_server
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"server_dir": str(tmp_path), "rcon_host": "127.0.0.1",
+                                    "rcon_port": 25575, "rcon_password": "secret"}), encoding="utf-8")
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", settings)
+    monkeypatch.setattr(parkour_server, "_running_minecraft_clients", lambda: [])
+    server = ParkourServer()
+
+    class StartingProcess:
+        @staticmethod
+        def poll():
+            return None
+
+    server._process = StartingProcess()
+    server._process_started_at = time.monotonic()
+    monkeypatch.setattr(server, "_rcon", lambda *_args, **_kwargs: pytest.fail("RCON must wait during warm-up"))
+    status = server.status()
+    assert status["running"] is True
+    assert status["ready"] is False
+    assert "uruchamia świat" in status["message"]

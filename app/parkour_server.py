@@ -35,6 +35,7 @@ _VERSION_CACHE_TTL = 600
 _VERSION_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
 _WINDOWS_PROCESS_CACHE: tuple[float, list[dict[str, Any]]] = (0.0, [])
 _START_LOCK = threading.Lock()
+_SERVER_STARTUP_GRACE_SEC = 8.0
 
 
 def _write_parkour_settings(state: dict[str, Any]) -> None:
@@ -92,7 +93,7 @@ def _windows_java_processes() -> list[dict[str, Any]]:
         processes = value if isinstance(value, list) else [value] if isinstance(value, dict) else []
     except (OSError, subprocess.SubprocessError, ValueError):
         processes = []
-    _WINDOWS_PROCESS_CACHE = (time.monotonic() + 3, processes)
+    _WINDOWS_PROCESS_CACHE = (time.monotonic() + 15, processes)
     return [dict(item) for item in processes]
 
 
@@ -123,50 +124,71 @@ def _running_minecraft_clients() -> list[dict[str, Any]]:
     return results
 
 
-def _java_candidates() -> list[Path]:
-    candidates: list[Path] = []
+def _java_candidates():
+    """Yield likely Java installations in priority order without crawling every root first."""
+    seen: set[Path] = set()
+    executable_name = "java.exe" if os.name == "nt" else "java"
 
-    def add(value: str | Path | None) -> None:
+    def normalize(value: str | Path | None) -> Path | None:
         if not value:
-            return
+            return None
         path = Path(value).expanduser()
         if path.name.casefold() == "javaw.exe":
             path = path.with_name("java.exe")
         if path.is_dir():
-            path = path / ("bin/java.exe" if os.name == "nt" else "bin/java")
-        if path.is_file() and path not in candidates:
-            candidates.append(path)
+            path = path / "bin" / executable_name
+        try:
+            path = path.resolve()
+        except OSError:
+            return None
+        return path if path.is_file() and path not in seen else None
 
-    add(shutil.which("java"))
+    def emit(value: str | Path | None):
+        path = normalize(value)
+        if path is not None:
+            seen.add(path)
+            return path
+        return None
+
+    quick = emit(shutil.which("java"))
+    if quick:
+        yield quick
     java_home = os.environ.get("JAVA_HOME")
     if java_home:
-        add(Path(java_home) / "bin" / ("java.exe" if os.name == "nt" else "java"))
-    for proc in _windows_java_processes():
-        add(proc.get("path"))
+        candidate = emit(Path(java_home) / "bin" / executable_name)
+        if candidate:
+            yield candidate
 
+    # A running launcher often exposes its exact, already-compatible Java path.
     if os.name == "nt":
+        for proc in _windows_java_processes():
+            candidate = emit(proc.get("path"))
+            if candidate:
+                yield candidate
+
         appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
         local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
-        program_files = [Path(os.environ.get(name, "")) for name in ("ProgramFiles", "ProgramW6432") if os.environ.get(name)]
+        program_files = [Path(os.environ[name]) for name in ("ProgramFiles", "ProgramW6432") if os.environ.get(name)]
         roots = [appdata / ".minecraft" / "runtime", appdata / "Horizon", appdata / "HorizonLauncher",
                  appdata / "PrismLauncher", appdata / "MultiMC", local / "Horizon", local / "HorizonLauncher",
                  local / "PrismLauncher", local / "Programs" / "Horizon Launcher"]
         roots.extend(root / sub for root in program_files for sub in ("Eclipse Adoptium", "Java", "Microsoft"))
+        checked = 0
         for root in roots:
             if not root.is_dir():
                 continue
             try:
-                for path in root.rglob("java.exe"):
-                    add(path)
-                    if len(candidates) >= 100:
-                        return candidates
-                for path in root.rglob("javaw.exe"):
-                    add(path)
-                    if len(candidates) >= 100:
-                        return candidates
+                # rglob is lazy; the first usable runtime returns immediately rather
+                # than testing up to 100 executables with a fresh `java -version`.
+                for path in root.rglob(executable_name):
+                    candidate = emit(path)
+                    if candidate:
+                        yield candidate
+                        checked += 1
+                        if checked >= 100:
+                            return
             except OSError:
                 continue
-    return candidates
 
 
 def _java_major(executable: Path) -> int | None:
@@ -182,15 +204,11 @@ def _java_major(executable: Path) -> int | None:
 
 
 def find_java(required_major: int) -> tuple[Path, int] | None:
-    suitable = []
     for executable in _java_candidates():
         major = _java_major(executable)
         if major is not None and major >= required_major:
-            suitable.append((major, executable))
-    if not suitable:
-        return None
-    major, executable = max(suitable, key=lambda item: item[0])
-    return executable, major
+            return executable, major
+    return None
 
 
 def _safe_extract_java(payload: bytes, destination: Path) -> Path:
@@ -405,12 +423,17 @@ def _patch_map_datapack(world: Path) -> None:
             value = json.loads(modifier.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise ValueError(f"Nie udało się odczytać modyfikatora mapy {modifier.name}: {exc}") from exc
-        # Minecraft 26.3 expects one item-modifier object per resource. The
-        # bundled 1.7.4 datapack wraps this one modifier in an obsolete array.
+        # Minecraft 26.3 expects a typed object resource. The bundled map
+        # stores a one-element loot-function array with the old `function` key;
+        # simply unwrapping it is insufficient (26.3 reports "No key type").
         if isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict):
             value = value[0]
-        if not isinstance(value, dict) or value.get("function") != "minecraft:set_components":
+        if not isinstance(value, dict):
             raise ValueError(f"Nieznany format modyfikatora mapy {modifier.name}; nie można go bezpiecznie migrować.")
+        modifier_type = value.pop("function", value.get("type"))
+        if modifier_type != "minecraft:set_components":
+            raise ValueError(f"Nieznany format modyfikatora mapy {modifier.name}; nie można go bezpiecznie migrować.")
+        value["type"] = modifier_type
         modifier.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     # The map already renders its timer in the actionbar. Add the player's
@@ -524,6 +547,9 @@ def _send_packet(sock: socket.socket, packet_id: int, packet_type: int, text: st
 class ParkourServer:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
+        self._process_started_at = 0.0
+        self._next_rcon_probe_at = 0.0
+        self._rcon_retry_delay = 1.0
         self._last_status_ready: bool | None = None
         self._last_logged_exit: int | None = None
 
@@ -584,7 +610,7 @@ class ParkourServer:
             return self.status()
         if state and (state.get("server_dir") != str(root) or state.get("minecraft_version") != selected_version):
             try:
-                self._rcon("list")
+                self._rcon("list", log_failure=False)
             except Exception:
                 pass
             else:
@@ -666,7 +692,7 @@ class ParkourServer:
         # GiftStream restart, discover an already-running instance through loopback
         # RCON instead of launching a duplicate on the same port.
         try:
-            self._rcon("list")
+            self._rcon("list", log_failure=False)
             diagnostics.info("Wykryto już działający lokalny serwer Minecraft przez RCON; nie uruchamiam duplikatu.")
             return self.status()
         except Exception:
@@ -703,7 +729,14 @@ class ParkourServer:
         else:
             kwargs["start_new_session"] = True
         try:
-            self._process = subprocess.Popen([java, "-Xms1G", "-Xmx2G", "-jar", str(jar), "nogui"], **kwargs)
+            self._process = subprocess.Popen([
+                java, "-Xms512M", "-Xmx2G", "-XX:+UseG1GC",
+                "-XX:+ParallelRefProcEnabled", "-XX:MaxGCPauseMillis=150",
+                "-jar", str(jar), "nogui",
+            ], **kwargs)
+            self._process_started_at = time.monotonic()
+            self._next_rcon_probe_at = self._process_started_at + _SERVER_STARTUP_GRACE_SEC
+            self._rcon_retry_delay = 1.0
             self._last_logged_exit = None
             self._last_status_ready = None
             diagnostics.info("Proces serwera Minecraft uruchomiono (PID %s); stdout/stderr zapisuję do %s.",
@@ -715,7 +748,7 @@ class ParkourServer:
             log.close()
         return self.status()
 
-    def _rcon(self, command: str) -> str:
+    def _rcon(self, command: str, *, log_failure: bool = True) -> str:
         state = self.settings()
         host = str(state.get("rcon_host", "127.0.0.1"))
         port = int(state.get("rcon_port", 25575))
@@ -740,7 +773,8 @@ class ParkourServer:
         except Exception as exc:
             # Log only the command verb: chat payloads, player data and secrets
             # must not leak into the copyable diagnostics.
-            diagnostics.warning("Polecenie RCON '%s' nie powiodło się: %s", command_kind, exc)
+            if log_failure:
+                diagnostics.warning("Polecenie RCON '%s' nie powiodło się: %s", command_kind, exc)
             raise
 
     def status(self) -> dict[str, Any]:
@@ -770,20 +804,35 @@ class ParkourServer:
                 self._last_logged_exit = code
             self._last_status_ready = False
             return response
+        now = time.monotonic()
+        process_running = self._process is not None and self._process.poll() is None
+        if process_running:
+            response["running"] = True
+        # The vanilla server spends its first seconds loading registries/world data.
+        # Do not block setup or hammer an unopened RCON socket during warm-up.
+        if process_running and now - self._process_started_at < _SERVER_STARTUP_GRACE_SEC:
+            response["message"] = "Minecraft uruchamia świat i rejestry…"
+            return response
+        if now < self._next_rcon_probe_at:
+            response["message"] = "Minecraft uruchamia się — czekam na RCON."
+            return response
         try:
-            listing = self._rcon("list")
+            listing = self._rcon("list", log_failure=False)
             player_match = re.search(r"There are (\d+) of a max of \d+ players online:(.*)", listing, re.IGNORECASE)
             players = [name.strip() for name in (player_match.group(2) if player_match else "").split(",") if name.strip()]
             response.update({"running": True, "ready": True,
                              "players_online": int(player_match.group(1)) if player_match else len(players),
                              "players": players,
                              "message": "Minecraft gotowy · " + (listing or "RCON połączony")})
+            self._rcon_retry_delay = 1.0
+            self._next_rcon_probe_at = now + 2.0
             if self._last_status_ready is not True:
                 diagnostics.info("Serwer Minecraft jest gotowy i odpowiada przez RCON (%s).", state.get("server_address", "localhost:25565"))
             self._last_status_ready = True
         except Exception as exc:
-            if self._process is not None and self._process.poll() is None:
-                response["running"] = True
+            response["running"] = process_running
+            self._next_rcon_probe_at = now + self._rcon_retry_delay
+            self._rcon_retry_delay = min(8.0, self._rcon_retry_delay * 1.7)
             if self._last_status_ready is not False:
                 diagnostics.warning("Serwer Minecraft nie jest jeszcze gotowy przez RCON: %s", exc)
             self._last_status_ready = False

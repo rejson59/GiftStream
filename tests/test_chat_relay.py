@@ -34,5 +34,5 @@ def test_simulated_comment_is_not_relayed(monkeypatch):
     commands = []
     monkeypatch.setattr(main.parkour_server, "settings", lambda: {"chat_relay_enabled": True})
     monkeypatch.setattr(main.parkour_server, "relay_chat", lambda text: commands.append(text))
-    asyncio.run(main.process_event(TikTokEvent(type="comment", user="viewer", comment="test", source="simulator")))
+    asyncio.run(main.process_event(TikTokEvent(type="comment", user="viewer", comment="test", source="test")))
     assert not commands

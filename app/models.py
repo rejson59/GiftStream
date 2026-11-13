@@ -64,7 +64,7 @@ EventType = Literal["gift", "like", "follow", "comment", "join", "share", "subsc
 
 
 class TikTokEvent(BaseModel):
-    """Znormalizowany event z TikToka / symulatora / webhook'a."""
+    """Normalized event from TikTok LIVE or a trusted webhook."""
     type: EventType
     user: str = "unknown"                    # @unique_id widza
     nickname: str = ""
@@ -75,13 +75,14 @@ class TikTokEvent(BaseModel):
     diamonds_estimated: bool = False
     gift_coins: int = 0
     gift_coins_estimated: bool = True
+    gift_coins_source: str = ""
     repeat_count: int = 1
     repeat_end: bool = True                  # True = koniec streaka (akcja dopiero wtedy)
     comment: Optional[str] = None
     like_count: int = 0
     total_likes: int = 0
     viewer_count: int = 0
-    source: str = "tiktok"                   # tiktok | simulator | webhook | test
+    source: str = "tiktok"                   # tiktok | webhook
 
 
 class GameAction(BaseModel):
@@ -99,16 +100,22 @@ class GameAction(BaseModel):
 
 class AppConfig(BaseModel):
     tiktok_username: str = ""
-    mode: Literal["tiktok", "simulator", "managed"] = "simulator"
+    # `simulator` remains accepted only to migrate older config.json files.
+    mode: Literal["tiktok", "managed", "disconnected", "simulator"] = "disconnected"
     active_preset_id: str = "default"
     tts_enabled: bool = False
     tts_voice: str = "pl-PL"
     sound_alerts: bool = False
     sound_volume: float = Field(default=0.55, ge=0.0, le=1.0)
     sound_url: str = ""
-    overlay_template: str = "grid"           # grid | list | minimal
+    sound_label: str = Field(default="", max_length=100)
+    overlay_template: Literal["grid", "list", "minimal", "streamer", "ticker", "spotlight"] = "grid"
+    overlay_theme: Literal["mint", "violet", "amber", "ocean"] = "mint"
+    overlay_accent: str = Field(default="#8cf0bc", pattern=r"^#[0-9A-Fa-f]{6}$")
+    overlay_scale: float = Field(default=1.0, ge=0.7, le=1.4)
+    overlay_title: str = Field(default="", max_length=60)
+    overlay_fields: str = Field(default="earnings,gifts,actions,viewers", max_length=80)
     bridge_webhook_secret: str = ""
-    simulator_interval_sec: float = 3.0
 
 
 # ---------------------------------------------------------------------------

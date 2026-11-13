@@ -5,6 +5,7 @@ import asyncio
 import json
 import ipaddress
 import os
+import re
 import secrets
 import time
 import urllib.error
@@ -69,16 +70,8 @@ config = AppConfig()
 
 
 class ConnectRequest(BaseModel):
-    mode: str = "simulator"
+    mode: Literal["tiktok", "managed"] = "tiktok"
     username: str = ""
-
-
-class SimulateRequest(BaseModel):
-    kind: str = "gift"
-    gift_name: str | None = None
-    user: str = "viewer"
-    diamonds: int = 1
-    comment: str | None = None
 
 
 class EarningsSettingsRequest(BaseModel):
@@ -224,6 +217,7 @@ async def process_event(ev: TikTokEvent) -> None:
             if coins > 0:
                 ev.gift_coins = coins
                 ev.gift_coins_estimated = estimated
+                ev.gift_coins_source = "catalog"
     now = time.monotonic()
     gift_label = (ev.gift_name or "")[:100] if ev.type == "gift" else ""
     event_key = (ev.source[:40], ev.type, gift_label)
@@ -231,7 +225,7 @@ async def process_event(ev: TikTokEvent) -> None:
         _event_diag_times[event_key] = now
         if len(_event_diag_times) > 1000:
             _event_diag_times.pop(next(iter(_event_diag_times)))
-        diagnostics.info("Odebrano zdarzenie LIVE/test: source=%s type=%s%s%s.",
+        diagnostics.info("Odebrano zdarzenie: source=%s type=%s%s%s.",
                          ev.source[:40], ev.type,
                          f" gift={gift_label!r}" if gift_label else "",
                          f" count={ev.repeat_count}" if ev.type == "gift" else "")
@@ -355,6 +349,14 @@ async def startup() -> None:
     global config, _catalog_refresh_task, _catalog_refresh_started, _currency_refresh_task, _gift_refresh_loop_task
     diagnostics.info("Uruchamiam GiftStream %s; dane użytkownika: %s.", VERSION, DATA)
     config = read_config()
+    if config.mode == "simulator":
+        # Older builds persisted the demo as the startup mode, which generated
+        # fabricated viewers/events on every launch. Migrate to an inert state.
+        config.mode = "disconnected"
+        save_config()
+        diagnostics.info("Wyłączono dawny tryb symulatora; GiftStream czeka na ręczne połączenie TikTok LIVE.")
+    if config.tiktok_username:
+        connector.username = config.tiktok_username
     parkour_game = get_game("minecraft-parkour")
     if parkour_game and preset_store.get_preset(parkour_game["preset_id"]) is None:
         preset_store.save_preset(Preset(id=parkour_game["preset_id"], name=parkour_game["title"],
@@ -373,9 +375,7 @@ async def startup() -> None:
         _gift_refresh_loop_task = asyncio.create_task(_gift_catalog_refresh_loop())
     if _currency_refresh_task is None or _currency_refresh_task.done():
         _currency_refresh_task = asyncio.create_task(_currency_refresh_loop())
-    if config.mode == "simulator":
-        await connector.start("simulator", config.tiktok_username)
-    elif config.mode == "tiktok" and config.tiktok_username:
+    if config.mode == "tiktok" and config.tiktok_username:
         # Restore the last explicitly selected public LIVE channel after an app restart.
         result = await connector.start("tiktok", config.tiktok_username)
         if not result.get("ok"):
@@ -722,13 +722,6 @@ async def activate_preset(preset_id: str) -> dict:
     diagnostics.info("Aktywowano preset Parkour '%s'.", preset.name)
     return {"ok": True, "preset": preset.model_dump()}
 
-@app.post("/api/rules/{rule_id}/test")
-async def test_rule(rule_id: str) -> dict:
-    action = await engine.test_rule(rule_id)
-    if action is None:
-        raise HTTPException(404, "Nie znaleziono reguły")
-    return action.model_dump()
-
 @app.get("/api/logs")
 async def get_diagnostics(limit: int = 300) -> dict[str, Any]:
     lines = diagnostics.get_logs(limit)
@@ -750,14 +743,32 @@ async def clear_diagnostics() -> dict[str, bool]:
 @app.post("/api/connect")
 async def connect(req: ConnectRequest) -> dict:
     global config
+    username = req.username.strip().lstrip("@").strip()
+    if req.mode == "tiktok" and not re.fullmatch(r"[A-Za-z0-9._]{2,24}", username):
+        raise HTTPException(400, "Podaj poprawny @username TikTok LIVE (bez spacji).")
+
+    previous_username = config.tiktok_username.strip().lstrip("@").casefold()
+    new_tiktok_user = req.mode == "tiktok" and username.casefold() != previous_username
+    if new_tiktok_user:
+        # Stop old-user events first, then clear every counter/history before the
+        # new connector is allowed to receive data. This prevents mixed LIVE stats.
+        await connector.stop()
+        hub.reset_stats()
+        engine.reset_stats()
+        config.mode = "disconnected"
+        config.tiktok_username = username
+        save_config()
+        await hub.broadcast_snapshot()
+        await hub.publish_status({"stats_reset": True})
+        diagnostics.info("Nowy kanał TikTok LIVE @%s; wyzerowano statystyki przed połączeniem.", username)
     try:
-        result = await connector.start(req.mode, req.username)
+        result = await connector.start(req.mode, username)
     except Exception as exc:
         diagnostics.error("Błąd uruchamiania konektora (%s): %s", req.mode, exc, exc_info=exc)
         raise HTTPException(500, "Nie udało się uruchomić połączenia. Szczegóły są w panelu logów.") from exc
     if result.get("ok"):
-        config.mode = req.mode  # type: ignore[assignment]
-        config.tiktok_username = req.username.lstrip("@")
+        config.mode = req.mode
+        config.tiktok_username = username if req.mode == "tiktok" else config.tiktok_username
         save_config()
     await hub.publish_status(connector.status())
     return result
@@ -766,34 +777,11 @@ async def connect(req: ConnectRequest) -> dict:
 async def disconnect() -> dict:
     global config
     await connector.stop()
-    connector.mode = "simulator"
-    config.mode = "simulator"
+    config.mode = "disconnected"
     save_config()
     await hub.publish_status(connector.status())
     diagnostics.info("Połączenie zatrzymano ręcznie; automatyczne wznowienie wyłączono.")
     return {"ok": True, "message": "Rozłączono"}
-
-@app.post("/api/simulate")
-async def simulate(req: SimulateRequest) -> dict:
-    if req.gift_name:
-        gift = next((g for g in list_gifts() if g["name"].lower() == req.gift_name.lower()), None)
-        ev = TikTokEvent(type="gift", user=req.user, nickname=req.user,
-                         gift_name=req.gift_name, gift_id=gift["id"] if gift else None,
-                         gift_image_url=gift.get("image_url") if gift else None,
-                         diamonds=req.diamonds or (gift["diamonds"] if gift else 1), source="test")
-    elif req.kind == "comment":
-        ev = TikTokEvent(type="comment", user=req.user, nickname=req.user,
-                         comment=req.comment or "boss", source="test")
-    elif req.kind == "like":
-        ev = TikTokEvent(type="like", user=req.user, nickname=req.user,
-                         like_count=max(req.diamonds, 1), source="test")
-    else:
-        ev = TikTokEvent(type=req.kind if req.kind in ("gift", "follow", "share", "join", "subscribe") else "gift",
-                         user=req.user, nickname=req.user,
-                         gift_name="Rose" if req.kind == "gift" else None,
-                         diamonds=req.diamonds, source="test")
-    await process_event(ev)
-    return {"ok": True, "event": ev.model_dump()}
 
 @app.post("/api/bridge/event")
 async def bridge_event(ev: TikTokEvent, x_giftstream_secret: str | None = Header(default=None)) -> dict:

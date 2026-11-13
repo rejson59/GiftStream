@@ -1,10 +1,8 @@
 # TikTok LIVE connection options
 
-GiftStream currently offers three source modes in **Creator Studio → Stream connection**.
+GiftStream offers the real TikTokLive connector and an optional external WebSocket adapter in **Creator Studio → Stream connection**. It starts disconnected and does not generate simulated activity.
 
-## Simulator
-
-Runs locally and produces synthetic gifts, likes, comments, follows and joins. It is the default so you can test the full gift → preset → game pipeline without a LIVE room.
+Changing to a different TikTok username stops the previous connector, clears the current session counters/history, and only then starts receiving the new channel's data. The first valid channel connection also clears any old session/demo statistics. Manual disconnect remains disabled for automatic reconnect on the next app start.
 
 ## TikTokLive (free, unofficial)
 
@@ -20,7 +18,7 @@ Select **Managed API** and configure `TIKTOOL_API_KEY` in `.env`. The adapter us
 
 ## Biblioteka oryginalnych giftów
 
-Po połączeniu TikTokLive prosi o katalog prezentów pokoju LIVE. GiftStream zapisuje lokalnie ID, nazwę, wartość, informację o serii i bezpośredni URL obrazka z metadanych giftu. Biblioteka OBS korzysta z tego oryginalnego obrazka z hostingu TikToka; GiftStream nie kopiuje ani nie hostuje assetów. Jeżeli katalog lub oryginalna grafika nie są dostępne, lista pokazuje placeholder zamiast podmieniać artwork na emoji. Rzeczywista cena i lista giftów mogą się różnić zależnie od regionu oraz zmian po stronie TikToka.
+GiftStream odświeża publiczny katalog TikToka w tle i przechowuje do 1000 wpisów, także wtedy, gdy gift nie ma grafiki. Zapisuje ID, nazwę, diamenty twórcy, jawne pola ceny monet (jeżeli źródło je udostępnia), informację o serii i bezpośredni URL grafiki. Gift po LIVE może uzupełnić katalog o cenę jawnie przekazaną przez event; późniejszy wpis bez ceny nie nadpisuje zaobserwowanej wartości. Biblioteka OBS korzysta z oryginalnego obrazka TikToka, a brak grafiki nie ukrywa prezentu. Cena monet nie jest zgadywana z diamentów — jeżeli TikTok jej nie dostarcza, nie da się jej rzetelnie wyliczyć automatycznie. Ceny i lista giftów zależą od regionu i zmian po stronie TikToka.
 
 ## Orientacyjny kalkulator zarobku twórcy
 

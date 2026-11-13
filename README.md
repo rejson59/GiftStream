@@ -8,15 +8,15 @@
 - Reguły parkour można edytować: push jest najtańszy (1–29 monet), zmiany poziomu kosztują od 30 monet, a reset i anty-reset od 1000 monet. Progi opierają się wyłącznie na cenie monet jawnie znanej z katalogu TikToka — diamenty nie są traktowane jako cena widza.
 - Jednoklikowe przygotowanie lokalnego serwera vanilla z wyborem najnowszej stabilnej lub jednej z ostatnich wersji Minecrafta. GiftStream pobiera i weryfikuje serwer z oficjalnego manifestu Mojang, izoluje świat dla każdej wersji oraz pokazuje adres `localhost:25565`, który można skopiować. Mapa działa jako datapack bez niezweryfikowanych pluginów; instalacja naprawia dwa niezgodne zasoby item modifier i dodaje HUD poziomu obok istniejącego timera. Oryginalna mapa była przygotowana dla 26.2; poprawka usuwa zgłoszony błąd ładowania zasobów w 26.3, ale nie oznacza pełnej certyfikacji mapy dla wszystkich wersji. GiftStream wykrywa Javę w launcherach albo instaluje per-user zgodną wersję automatycznie; wymagane są internet przy pierwszej konfiguracji i samodzielna akceptacja Minecraft EULA. Szczegóły: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
 - Opcjonalne przekazywanie treści komentarzy LIVE do czatu Minecraft. Tekst kodowany jest jako `tellraw` — nie jest wykonywany jako polecenie.
-- Symulator oraz **nieoficjalny** konektor TikTokLive. Zdarzenia zależą od aktualnej dostępności biblioteki i TikToka; GiftStream ponawia zerwane połączenia z czytelnym statusem i rosnącym odstępem, rozpoznaje kanał offline i sprawdza go ponownie co 2–5 minut, a przy limicie usługi podpisującej wstrzymuje bezcelowe próby.
+- **Nieoficjalny** konektor TikTokLive. GiftStream nie generuje fikcyjnych zdarzeń ani liczników; uruchamia się rozłączony i czeka na ręczne połączenie kanału. Przy zmianie nazwy kanału najpierw zatrzymuje poprzednie połączenie i zeruje statystyki, a potem zaczyna zbierać zdarzenia nowego LIVE. Połączenie zależy od aktualnej dostępności biblioteki i TikToka; GiftStream ponawia zerwane połączenia z czytelnym statusem i rosnącym odstępem, rozpoznaje kanał offline i sprawdza go ponownie co 2–5 minut, a przy limicie usługi podpisującej wstrzymuje bezcelowe próby.
 - Diagnostyka obejmuje połączenia, wejściowe zdarzenia, reguły i akcje Parkour, instalację Java/serwera/mapy, RCON, błędy API oraz błędy interfejsu; logi JVM serwera są dołączane do panelu Minecraft. Logi można kopiować z panelu głównego lub zakładki Minecraft; diagnostyka nie dopisuje treści komentarzy LIVE.
-- Biblioteka giftów z oryginalnymi grafikami TikToka, wyszukiwaniem i sortowaniem według popularności orientacyjnej lub ceny w monetach. Monety widza i diamenty twórcy są odrębnymi wartościami.
+- Biblioteka może przechować do 1000 giftów z bieżącego katalogu TikToka, również bez obrazka; obsługuje wyszukiwanie i sortowanie. Monety widza i diamenty twórcy pozostają osobnymi wartościami. Ceny monet są przyjmowane tylko z jawnych danych TikToka lub LIVE, nigdy zgadywane z diamentów; jeśli źródło nie zwróci ceny, GiftStream nie może wiarygodnie wyliczyć jej automatycznie.
+- Osobne studio dźwięków LIVE z wyszukiwarką MyInstants, odsłuchem i wyborem alertu jednym kliknięciem; własny URL HTTPS, głośność i TTS są w tym samym miejscu. Nakładki OBS mają sześć układów oraz edytowalną paletę, kolor, skalę, tytuł i widoczne wskaźniki.
 - Alerty dźwiękowe, synteza mowy, widżety OBS oraz szacunkowa wartość nagród w PLN. Szacunek nie jest oficjalną stawką ani obietnicą wypłaty TikToka.
-- Wyszukiwarka i dodawanie dźwięków MyInstants. Jest to nieoficjalny odczyt strony publicznej i może przestać działać, jeśli zmieni się jej układ lub dostępność.
 
 ## Aplikacja Windows i aktualizacje
 
-**GiftStream dla Windows to jeden samodzielny plik EXE.** Pobierz [GiftStream.exe](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream.exe) i uruchom go — osobny instalator ani launcher nie są potrzebne. Aplikacja otwiera natywne okno z osadzonym WebView2 bez czekania na sprawdzenie sieci ani utworzenie skrótu; skrót GiftStream w menu Start przygotowuje w tle. Python nie musi być zainstalowany; WebView2 musi być dostępny w Windows.
+**GiftStream dla Windows to jeden samodzielny plik EXE.** Pobierz [GiftStream.exe](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream.exe) i uruchom go — osobny instalator ani launcher nie są potrzebne. Aplikacja otwiera natywne okno z osadzonym WebView2 bez czekania na sprawdzenie sieci ani utworzenie skrótu; skrót GiftStream w menu Start przygotowuje w tle. Ponowne uruchomienie przy działającej aplikacji nie otwiera drugiego okna. Python nie musi być zainstalowany; WebView2 musi być dostępny w Windows.
 
 Aplikacja sprawdza aktualizacje podczas uruchamiania oraz co 30 minut. Zweryfikowana nowa wersja jest pobierana i automatycznie uruchamiana; w trakcie restartu GiftStream może na chwilę przestać odbierać zdarzenia, a po restarcie może być potrzebne ponowne połączenie z LIVE. Dane są przechowywane w `%LOCALAPPDATA%\GiftStream`. Nowa instalacja jest czysta i nie importuje danych z poprzednich instalacji.
 
@@ -33,7 +33,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Otwórz `http://localhost:8000`. Domyślnie działa symulator. Nakładki OBS są dostępne pod `/overlay?template=grid`, `list`, `minimal` lub `streamer`.
+Otwórz `http://localhost:8000`. GiftStream uruchamia się rozłączony; połącz prawdziwy kanał TikTok LIVE, aby rozpocząć naliczanie statystyk. Nakładki OBS są dostępne pod `/overlay?template=grid`, `list`, `minimal` lub `streamer`.
 
 ## Bezpieczeństwo i ograniczenia
 

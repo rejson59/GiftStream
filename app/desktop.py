@@ -28,6 +28,82 @@ GITHUB_REPOSITORY = os.environ.get("GIFTSTREAM_GITHUB_REPOSITORY", "rejson59/Gif
 UPDATE_CHECK_SECONDS = 30 * 60
 FIRST_UPDATE_CHECK_SECONDS = 15
 IS_WINDOWS = os.name == "nt"
+_INSTANCE_MUTEX_HANDLE = None
+_INSTANCE_LOCK_FILE = None
+
+
+def _acquire_single_instance() -> bool:
+    """Hold a process-wide lock so repeated EXE clicks cannot open more windows."""
+    global _INSTANCE_MUTEX_HANDLE, _INSTANCE_LOCK_FILE
+    if IS_WINDOWS:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_mutex = kernel32.CreateMutexW
+        create_mutex.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+        create_mutex.restype = ctypes.c_void_p
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (ctypes.c_void_p,)
+        close_handle.restype = ctypes.c_bool
+        ctypes.set_last_error(0)
+        handle = create_mutex(None, False, "Local\\GiftStream.SingleInstance")
+        if not handle:
+            raise OSError(ctypes.get_last_error(), "CreateMutexW failed")
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(handle)
+            return False
+        _INSTANCE_MUTEX_HANDLE = handle
+        return True
+
+    # Use a per-user advisory lock in the system temp directory on Unix; keep
+    # runtime lock files out of the checkout and release automatically on exit.
+    import fcntl
+    import tempfile
+
+    lock_path = Path(tempfile.gettempdir()) / f"giftstream-{os.getuid()}-instance.lock"
+    lock_file = lock_path.open("a+")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        return False
+    _INSTANCE_LOCK_FILE = lock_file
+    return True
+
+
+def _release_single_instance() -> None:
+    global _INSTANCE_MUTEX_HANDLE, _INSTANCE_LOCK_FILE
+    if _INSTANCE_MUTEX_HANDLE is not None:
+        import ctypes
+        close_handle = ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle
+        close_handle.argtypes = (ctypes.c_void_p,)
+        close_handle.restype = ctypes.c_bool
+        close_handle(_INSTANCE_MUTEX_HANDLE)
+        _INSTANCE_MUTEX_HANDLE = None
+    if _INSTANCE_LOCK_FILE is not None:
+        import fcntl
+        fcntl.flock(_INSTANCE_LOCK_FILE.fileno(), fcntl.LOCK_UN)
+        _INSTANCE_LOCK_FILE.close()
+        _INSTANCE_LOCK_FILE = None
+
+
+def _focus_existing_window() -> None:
+    if not IS_WINDOWS:
+        return
+    try:
+        import ctypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        find_window = user32.FindWindowW
+        find_window.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p)
+        find_window.restype = ctypes.c_void_p
+        window = find_window(None, "GiftStream")
+        if window:
+            user32.ShowWindow.argtypes = (ctypes.c_void_p, ctypes.c_int)
+            user32.SetForegroundWindow.argtypes = (ctypes.c_void_p,)
+            user32.ShowWindow(window, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(window)
+    except Exception:
+        pass
 
 
 def _publish_downloaded_update(tag: str, executable: Path) -> None:
@@ -116,14 +192,20 @@ class GiftStreamDesktop:
     def _apply_update(self, executable: Path) -> bool:
         if os.name != "nt":
             return False
+        released_instance_lock = False
         try:
             create_start_menu_shortcut(executable)
             flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            # The replacement process must acquire the mutex before it can show UI.
+            _release_single_instance()
+            released_instance_lock = True
             subprocess.Popen([str(executable)], cwd=str(data_dir()), creationflags=flags, close_fds=True)
             self.stop()
             return True
         except OSError:
             # Keep the downloaded update available so it can be retried at next launch.
+            if released_instance_lock:
+                _acquire_single_instance()
             return False
 
     def stop(self) -> None:
@@ -210,8 +292,15 @@ def _start_installed_version_if_needed() -> bool:
 
 
 def main() -> None:
-    if not _start_installed_version_if_needed():
+    if _start_installed_version_if_needed():
+        return
+    if not _acquire_single_instance():
+        _focus_existing_window()
+        return
+    try:
         GiftStreamDesktop().run()
+    finally:
+        _release_single_instance()
 
 
 if __name__ == "__main__":

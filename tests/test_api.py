@@ -197,9 +197,18 @@ def test_live_audio_preferences_are_persisted_without_exposing_secrets(monkeypat
     assert invalid.status_code == 422
     assert TestClient(main.app).put("/api/config", json={"sound_url": "http://example.com/alert.mp3"}).status_code == 422
     assert TestClient(main.app).put("/api/config", json={"sound_url": "https://localhost/alert.mp3"}).status_code == 422
-    saved_sound = TestClient(main.app).put("/api/config", json={"sound_url": "https://sounds.example.org/alert.mp3"})
+    saved_sound = TestClient(main.app).put("/api/config", json={
+        "sound_url": "https://sounds.example.org/alert.mp3", "sound_label": "Test sound",
+        "overlay_template": "spotlight", "overlay_theme": "violet", "overlay_accent": "#c4a7ff",
+        "overlay_scale": 1.15, "overlay_title": "MY LIVE", "overlay_fields": "gifts,actions",
+    })
     assert saved_sound.status_code == 200
     assert saved_sound.json()["sound_url"] == "https://sounds.example.org/alert.mp3"
+    assert saved_sound.json()["sound_label"] == "Test sound"
+    assert saved_sound.json()["overlay_template"] == "spotlight"
+    assert saved_sound.json()["overlay_theme"] == "violet"
+    assert saved_sound.json()["overlay_scale"] == 1.15
+    assert TestClient(main.app).put("/api/config", json={"overlay_accent": "red"}).status_code == 422
 
 
 def test_update_check_can_be_requested_and_reports_completion():
