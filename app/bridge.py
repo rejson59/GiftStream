@@ -17,6 +17,7 @@ from fastapi import WebSocket
 from .models import GameAction, TikTokEvent
 from .earnings import resolve_diamonds
 from .paths import data_dir
+from . import diagnostics
 
 UDP_HOST, UDP_PORT = "127.0.0.1", 47821
 EVENTS_FILE = data_dir() / "events.jsonl"
@@ -81,8 +82,8 @@ class Hub:
         try:
             with EVENTS_FILE.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(data, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
+        except Exception as exc:
+            diagnostics.warning("Nie udało się dopisać akcji do lokalnego dziennika JSONL: %s", exc)
 
     async def publish_status(self, status: dict) -> None:
         await self._broadcast(self.feed_clients, {"kind": "status", "data": status})
@@ -125,5 +126,5 @@ def _udp_send(payload: dict) -> None:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.sendto(json.dumps(payload, ensure_ascii=False).encode("utf-8"), (UDP_HOST, UDP_PORT))
-    except Exception:
-        pass
+    except Exception as exc:
+        diagnostics.warning("Nie udało się wysłać lokalnej akcji przez UDP bridge: %s", exc)

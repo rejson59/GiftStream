@@ -14,7 +14,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
@@ -44,6 +44,26 @@ _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
 app = FastAPI(title="GiftStream", version=VERSION,
               description="Prezenty z TikTok LIVE sterują grą")
+
+
+@app.middleware("http")
+async def log_http_failures(request: Request, call_next):
+    """Capture failed routes without logging query strings, bodies, or credentials."""
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        diagnostics.error("Nieobsłużony wyjątek HTTP %s %s: %s",
+                          request.method, request.url.path, exc, exc_info=exc)
+        raise
+    if response.status_code >= 500:
+        diagnostics.error("HTTP %s %s zakończyło się statusem %s.",
+                          request.method, request.url.path, response.status_code)
+    elif response.status_code >= 400:
+        diagnostics.warning("HTTP %s %s zakończyło się statusem %s.",
+                            request.method, request.url.path, response.status_code)
+    return response
+
+
 connector: TikTokConnector
 config = AppConfig()
 
@@ -82,12 +102,23 @@ class ParkourChatRelayRequest(BaseModel):
     enabled: bool = False
 
 
+class ClientDiagnosticRequest(BaseModel):
+    source: str = Field(default="browser", max_length=80)
+    message: str = Field(min_length=1, max_length=1500)
+
+
 async def publish_game_action(action: GameAction) -> None:
+    trigger = action.triggered_by
+    trigger_hint = f" po zdarzeniu {trigger.type}" if trigger else ""
+    diagnostics.info("Dopasowano regułę '%s': akcja '%s'%s.",
+                     action.rule_name or "(bez nazwy)", action.action, trigger_hint)
     await hub.publish_action(action)
     if action.action.startswith("parkour_"):
         try:
             await _run_parkour_action(action)
         except Exception as exc:
+            diagnostics.error("Akcja Parkour '%s' z reguły '%s' nie powiodła się: %s",
+                              action.action, action.rule_name, exc, exc_info=exc)
             await hub.publish_status({"parkour_result": {"ok": False, "message": str(exc)}})
 
 
@@ -102,29 +133,39 @@ async def _run_parkour_action(action: GameAction) -> None:
     global parkour_reset_task, parkour_reset_player
     settings = parkour_server.settings()
     if not settings.get("enabled"):
+        diagnostics.warning("Akcja Parkour '%s' pominięta: lokalne sterowanie grą jest wyłączone lub serwer nie jest skonfigurowany.",
+                            action.action)
         return
     player = str(action.params.get("player") or settings.get("player") or "")
     if action.action == "parkour_reset":
         if parkour_reset_task and not parkour_reset_task.done():
             parkour_reset_task.cancel()
         await asyncio.to_thread(parkour_server.start_reset, player)
+        diagnostics.info("Rozpoczęto reset Parkour z 60-sekundowym odliczaniem dla %s.", player)
         parkour_reset_player = player
+        countdown_update_failed = False
         async def countdown() -> None:
             global parkour_reset_task, parkour_reset_player
+            nonlocal countdown_update_failed
             try:
                 for remaining in range(60, 0, -1):
                     await hub.publish_status({"parkour_reset_countdown": remaining, "parkour_player": player})
                     try:
                         await asyncio.to_thread(parkour_server.update_reset_countdown, player, remaining)
-                    except Exception:
-                        # Preserve the countdown if the player is temporarily offline.
-                        pass
+                    except Exception as exc:
+                        # Preserve the countdown if the player is temporarily offline,
+                        # but capture the first RCON failure in diagnostics.
+                        if not countdown_update_failed:
+                            diagnostics.warning("Nie udało się zaktualizować odliczania resetu przez RCON: %s", exc)
+                            countdown_update_failed = True
                     await asyncio.sleep(1)
                 result = await asyncio.to_thread(parkour_server.finish_reset, player)
+                diagnostics.info("Odliczanie zakończone; wysłano reset Parkour dla %s.", player)
                 await hub.publish_status({"parkour_reset_countdown": 0, "parkour_result": result})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                diagnostics.error("Odliczanie resetu Parkour nie powiodło się: %s", exc, exc_info=exc)
                 await hub.publish_status({"parkour_reset_countdown": None, "parkour_result": str(exc)})
             finally:
                 parkour_reset_task = None
@@ -135,7 +176,10 @@ async def _run_parkour_action(action: GameAction) -> None:
             parkour_reset_task.cancel()
             parkour_reset_task = None
             result = await asyncio.to_thread(parkour_server.cancel_reset, parkour_reset_player or player)
+            diagnostics.info("Anulowano reset Parkour dla %s.", parkour_reset_player or player)
             await hub.publish_status({"parkour_reset_countdown": None, "parkour_result": result})
+        else:
+            diagnostics.info("Odebrano akcję anty-reset, ale nie trwało żadne odliczanie.")
         return
     if action.action == "parkour_jail":
         result = await asyncio.to_thread(parkour_server.execute_action, action.action, player)
@@ -146,10 +190,12 @@ async def _run_parkour_action(action: GameAction) -> None:
             try:
                 await asyncio.sleep(20)
                 released = await asyncio.to_thread(parkour_server.release_jail, player)
+                diagnostics.info("Zwolniono gracza %s z parkour-jail.", player)
                 await hub.publish_status({"parkour_result": released})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                diagnostics.error("Nie udało się zwolnić gracza %s z parkour-jail: %s", player, exc, exc_info=exc)
                 await hub.publish_status({"parkour_result": str(exc)})
             finally:
                 parkour_jail_tasks.pop(player, None)
@@ -178,15 +224,33 @@ async def process_event(ev: TikTokEvent) -> None:
             if coins > 0:
                 ev.gift_coins = coins
                 ev.gift_coins_estimated = estimated
-    record_event(ev)
-    await hub.publish_event(ev)
-    if (ev.type == "comment" and ev.source == "tiktok" and ev.comment
-            and parkour_server.settings().get("chat_relay_enabled")):
-        try:
-            await asyncio.to_thread(parkour_server.relay_chat, ev.comment)
-        except Exception as exc:
-            await hub.publish_status({"parkour_chat_relay_error": str(exc)})
-    await engine.handle(ev)
+    now = time.monotonic()
+    gift_label = (ev.gift_name or "")[:100] if ev.type == "gift" else ""
+    event_key = (ev.source[:40], ev.type, gift_label)
+    if now - _event_diag_times.get(event_key, 0.0) >= 15:
+        _event_diag_times[event_key] = now
+        if len(_event_diag_times) > 1000:
+            _event_diag_times.pop(next(iter(_event_diag_times)))
+        diagnostics.info("Odebrano zdarzenie LIVE/test: source=%s type=%s%s%s.",
+                         ev.source[:40], ev.type,
+                         f" gift={gift_label!r}" if gift_label else "",
+                         f" count={ev.repeat_count}" if ev.type == "gift" else "")
+    try:
+        record_event(ev)
+        await hub.publish_event(ev)
+        if (ev.type == "comment" and ev.source == "tiktok" and ev.comment
+                and parkour_server.settings().get("chat_relay_enabled")):
+            try:
+                await asyncio.to_thread(parkour_server.relay_chat, ev.comment)
+                diagnostics.info("Komentarz LIVE przekazano do czatu Minecraft (treść pominięta w logu).")
+            except Exception as exc:
+                diagnostics.error("Nie udało się przekazać komentarza LIVE do Minecraft: %s", exc, exc_info=exc)
+                await hub.publish_status({"parkour_chat_relay_error": str(exc)})
+        await engine.handle(ev)
+    except Exception as exc:
+        diagnostics.error("Błąd przetwarzania zdarzenia source=%s type=%s: %s",
+                          ev.source, ev.type, exc, exc_info=exc)
+        raise
 
 
 connector = TikTokConnector(process_event)
@@ -194,15 +258,16 @@ _catalog_refresh_task: asyncio.Task | None = None
 _catalog_refresh_started = False
 _gift_refresh_loop_task: asyncio.Task | None = None
 _currency_refresh_task: asyncio.Task | None = None
+_event_diag_times: dict[tuple[str, str, str], float] = {}
 
 
 async def _currency_refresh_loop() -> None:
     while True:
         try:
             await asyncio.to_thread(earnings_tracker.refresh_usd_to_pln)
-        except Exception:
+        except Exception as exc:
             # Keep the last successful NBP rate and never delay application startup.
-            pass
+            diagnostics.warning("Nie udało się odświeżyć kursu NBP; pozostawiam ostatni zapisany kurs: %s", exc)
         await asyncio.sleep(12 * 60 * 60)
 
 
@@ -211,22 +276,31 @@ async def _gift_catalog_refresh_loop() -> None:
         await asyncio.sleep(24 * 60 * 60)
         try:
             await asyncio.to_thread(_refresh_catalog_safely)
-        except Exception:
+        except Exception as exc:
             # Retain the last cached gift catalog if TikTok or the network is unavailable.
-            pass
+            diagnostics.warning("Nie udało się odświeżyć katalogu giftów; zachowuję cache: %s", exc)
 
 
 def read_config() -> AppConfig:
     if CONFIG_PATH.exists():
         try:
-            return AppConfig(**json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-        except Exception:
-            pass
+            result = AppConfig(**json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+            diagnostics.info("Wczytano konfigurację GiftStream z %s.", CONFIG_PATH)
+            return result
+        except Exception as exc:
+            diagnostics.error("Nie udało się wczytać konfiguracji %s: %s; używam wartości domyślnych.",
+                              CONFIG_PATH, exc, exc_info=exc)
     return AppConfig()
 
 
 def save_config() -> None:
-    CONFIG_PATH.write_text(json.dumps(config.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(json.dumps(config.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+        diagnostics.info("Zapisano konfigurację GiftStream.")
+    except Exception as exc:
+        diagnostics.error("Nie udało się zapisać konfiguracji GiftStream: %s", exc, exc_info=exc)
+        raise
 
 
 def public_config() -> dict:
@@ -238,9 +312,12 @@ def public_config() -> dict:
 
 def _refresh_catalog_safely() -> int:
     try:
-        return refresh_tiktok_catalog()
-    except Exception:
+        count = refresh_tiktok_catalog()
+        diagnostics.info("Katalog giftów TikTok odświeżony; dostępnych wpisów: %s.", count)
+        return count
+    except Exception as exc:
         # Keep the last valid catalog and let the local gallery work offline.
+        diagnostics.warning("Nie udało się odświeżyć katalogu giftów TikTok; zachowuję cache: %s", exc)
         return 0
 
 
@@ -276,6 +353,7 @@ def _migrate_builtin_parkour_preset() -> bool:
 @app.on_event("startup")
 async def startup() -> None:
     global config, _catalog_refresh_task, _catalog_refresh_started, _currency_refresh_task, _gift_refresh_loop_task
+    diagnostics.info("Uruchamiam GiftStream %s; dane użytkownika: %s.", VERSION, DATA)
     config = read_config()
     parkour_game = get_game("minecraft-parkour")
     if parkour_game and preset_store.get_preset(parkour_game["preset_id"]) is None:
@@ -286,6 +364,7 @@ async def startup() -> None:
         save_config()
     _migrate_builtin_parkour_preset()
     engine.load_preset(config.active_preset_id)
+    diagnostics.info("Załadowano preset '%s'; tryb źródła: %s.", config.active_preset_id, config.mode)
     # TikTok's public catalog is loaded once in the background; the panel remains usable offline.
     if not _catalog_refresh_started:
         _catalog_refresh_started = True
@@ -305,6 +384,7 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    diagnostics.info("Zamykanie GiftStream; sprzątam zadania i połączenia.")
     await connector.stop()
     global parkour_reset_task
     if parkour_reset_task and not parkour_reset_task.done():
@@ -315,8 +395,8 @@ async def shutdown() -> None:
     if parkour_server.settings():
         try:
             await asyncio.to_thread(parkour_server.stop)
-        except Exception:
-            pass
+        except Exception as exc:
+            diagnostics.warning("Nie udało się zatrzymać lokalnego Minecraft podczas zamykania GiftStream: %s", exc)
     if _currency_refresh_task and not _currency_refresh_task.done():
         _currency_refresh_task.cancel()
     if _gift_refresh_loop_task and not _gift_refresh_loop_task.done():
@@ -437,6 +517,7 @@ async def snapshot() -> dict:
 @app.post("/api/stats/clear-activity")
 async def clear_activity() -> dict[str, Any]:
     hub.clear_activity()
+    diagnostics.info("Użytkownik wyczyścił listę aktywności; liczniki pozostawiono bez zmian.")
     await hub.broadcast_snapshot()
     return {"ok": True, "message": "Wyczyszczono listę aktywności. Liczniki statystyk pozostały bez zmian."}
 
@@ -444,6 +525,7 @@ async def clear_activity() -> dict[str, Any]:
 async def reset_stats() -> dict[str, Any]:
     hub.reset_stats()
     engine.reset_stats()
+    diagnostics.info("Użytkownik wyzerował wszystkie statystyki bieżącej sesji.")
     await hub.broadcast_snapshot()
     await hub.publish_status({"stats_reset": True})
     return {"ok": True, "message": "Wyzerowano wszystkie statystyki bieżącej sesji."}
@@ -477,6 +559,7 @@ async def update_config(data: dict[str, Any]) -> dict:
     except ValidationError as exc:
         raise HTTPException(422, detail=exc.errors()) from exc
     save_config()
+    diagnostics.info("Zaktualizowano ustawienia panelu GiftStream.")
     return public_config()
 
 @app.get("/api/gifts")
@@ -507,8 +590,11 @@ async def refresh_earnings_rate() -> dict[str, Any]:
 @app.get("/api/minecraft/versions")
 async def minecraft_version_options() -> dict[str, Any]:
     try:
-        return await asyncio.to_thread(minecraft_versions)
+        versions = await asyncio.to_thread(minecraft_versions)
+        diagnostics.info("Pobrano listę stabilnych wersji Minecraft; latest=%s.", versions.get("latest"))
+        return versions
     except Exception as exc:
+        diagnostics.error("Nie udało się pobrać manifestu wersji Minecraft: %s", exc, exc_info=exc)
         raise HTTPException(502, f"Nie udało się pobrać wersji Minecraft z manifestu Mojang: {exc}") from exc
 
 @app.get("/api/minecraft/parkour")
@@ -524,8 +610,10 @@ async def parkour_setup(req: ParkourSetupRequest) -> dict[str, Any]:
     try:
         return await asyncio.to_thread(parkour_server.setup, req.server_dir, req.player, req.eula_accepted, req.version)
     except (ValueError, FileExistsError) as exc:
+        diagnostics.warning("Konfiguracja Minecraft została odrzucona: %s", exc)
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
+        diagnostics.error("Endpoint konfiguracji Minecraft zakończył się błędem: %s", exc, exc_info=exc)
         raise HTTPException(502, str(exc)) from exc
 
 @app.post("/api/minecraft/parkour/start")
@@ -533,6 +621,7 @@ async def parkour_start() -> dict[str, Any]:
     try:
         return await asyncio.to_thread(parkour_server.start)
     except Exception as exc:
+        diagnostics.error("Nie udało się uruchomić serwera Minecraft przez API: %s", exc, exc_info=exc)
         raise HTTPException(400, str(exc)) from exc
 
 @app.post("/api/minecraft/parkour/stop")
@@ -540,6 +629,7 @@ async def parkour_stop() -> dict[str, Any]:
     try:
         return await asyncio.to_thread(parkour_server.stop)
     except Exception as exc:
+        diagnostics.error("Nie udało się zatrzymać serwera Minecraft przez API: %s", exc, exc_info=exc)
         raise HTTPException(400, str(exc)) from exc
 
 @app.put("/api/minecraft/parkour/enabled")
@@ -552,6 +642,7 @@ async def parkour_enabled(request: dict[str, bool]) -> dict[str, Any]:
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(state, indent=2), encoding="utf-8")
     temporary.replace(path)
+    diagnostics.info("Sterowanie zdarzeniami w lokalnym Parkour %s.", "włączono" if state["enabled"] else "wyłączono")
     return {**await asyncio.to_thread(parkour_server.status),
             "enabled": state["enabled"],
             "chat_relay_enabled": bool(state.get("chat_relay_enabled"))}
@@ -567,6 +658,7 @@ async def parkour_chat_relay(req: ParkourChatRelayRequest) -> dict[str, Any]:
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(path)
+    diagnostics.info("Przekazywanie komentarzy LIVE do Minecraft %s.", "włączono" if req.enabled else "wyłączono")
     return {"ok": True, "chat_relay_enabled": req.enabled}
 
 @app.post("/api/minecraft/parkour/action")
@@ -614,6 +706,7 @@ async def update_preset(preset_id: str, preset: Preset) -> dict:
     saved = preset_store.save_preset(preset)
     if engine.active_preset and engine.active_preset.id == preset_id:
         engine.load_preset(preset_id)
+    diagnostics.info("Zapisano preset Parkour '%s' (%s reguł).", saved.name, len(saved.rules))
     return saved.model_dump()
 
 @app.post("/api/presets/{preset_id}/activate")
@@ -626,6 +719,7 @@ async def activate_preset(preset_id: str) -> dict:
     config.active_preset_id = preset_id
     save_config()
     await hub.publish_status({"active_preset_id": preset_id, "active_preset_name": preset.name})
+    diagnostics.info("Aktywowano preset Parkour '%s'.", preset.name)
     return {"ok": True, "preset": preset.model_dump()}
 
 @app.post("/api/rules/{rule_id}/test")
@@ -637,12 +731,20 @@ async def test_rule(rule_id: str) -> dict:
 
 @app.get("/api/logs")
 async def get_diagnostics(limit: int = 300) -> dict[str, Any]:
-    return {"lines": diagnostics.get_logs(limit)}
+    lines = diagnostics.get_logs(limit)
+    minecraft_lines = await asyncio.to_thread(parkour_server.diagnostic_lines, min(max(limit, 1), 150))
+    return {"lines": lines + minecraft_lines}
+
+@app.post("/api/logs/client")
+async def report_client_diagnostic(req: ClientDiagnosticRequest) -> dict[str, bool]:
+    diagnostics.error("Błąd interfejsu (%s): %s", req.source, req.message)
+    return {"ok": True}
 
 @app.post("/api/logs/clear")
 async def clear_diagnostics() -> dict[str, bool]:
     diagnostics.clear_logs()
-    diagnostics.info("Dziennik wyczyszczony z panelu GiftStream.")
+    await asyncio.to_thread(parkour_server.clear_diagnostic_logs)
+    diagnostics.info("Dziennik aplikacji i log Minecraft wyczyszczono z panelu GiftStream.")
     return {"ok": True}
 
 @app.post("/api/connect")

@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .paths import bundle_root, data_dir
+from . import diagnostics
 
 PLAYER_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 MAP_FILENAME = "100-levels-5229-v1.7.4.zip"
@@ -288,11 +289,14 @@ def _install_java(required_major: int) -> Path:
 def ensure_java(required_major: int) -> tuple[Path, int]:
     found = find_java(required_major)
     if found:
+        diagnostics.info("Znaleziono kompatybilną Java %s: %s.", found[1], found[0])
         return found
+    diagnostics.info("Nie znaleziono Java %s+; rozpoczynam instalację runtime Adoptium.", required_major)
     executable = _install_java(required_major)
     actual_major = _java_major(executable) or 0
     if actual_major < required_major:
         raise RuntimeError(f"Zainstalowana Java {actual_major} jest za stara; wymagane Java {required_major}+.")
+    diagnostics.info("Zainstalowano Java %s: %s.", actual_major, executable)
     return executable, actual_major
 
 def _version_manifest(force: bool = False) -> dict[str, Any]:
@@ -362,10 +366,12 @@ def _release_details(version: dict[str, Any]) -> dict[str, Any]:
 def _download_server_jar(server_dir: Path, requested_version: str = "latest") -> tuple[Path, int, str, Path]:
     """Download a selected official release server jar and verify Mojang's SHA-1."""
     selected, version = _resolve_release(requested_version)
+    diagnostics.info("Manifest Mojang wybrał stabilne Minecraft %s; pobieram szczegóły wydania.", selected)
     version_info = _release_details(version)
     required_java = int(version_info.get("javaVersion", {}).get("majorVersion", 0))
     if required_java < 1:
         raise RuntimeError(f"Nie udało się odczytać wymagań Java dla Minecraft {selected}.")
+    diagnostics.info("Minecraft %s wymaga Java %s+.", selected, required_java)
     java_executable, _installed_java = ensure_java(required_java)
     server = version_info.get("downloads", {}).get("server", {})
     url = str(server.get("url", ""))
@@ -373,6 +379,7 @@ def _download_server_jar(server_dir: Path, requested_version: str = "latest") ->
     if not url.startswith("https://") or not (host == "piston-data.mojang.com" or host.endswith(".piston-data.mojang.com")):
         raise RuntimeError("Minecraft manifest zwrócił nieprawidłowy adres serwera.")
     request = urllib.request.Request(url, headers={"User-Agent": "GiftStream/1"})
+    diagnostics.info("Pobieram plik serwera Minecraft %s z oficjalnego hosta Mojang.", selected)
     with urllib.request.urlopen(request, timeout=90) as response:
         jar = response.read(MAX_SERVER_JAR_BYTES + 1)
     if len(jar) < 1024 or len(jar) > MAX_SERVER_JAR_BYTES:
@@ -384,6 +391,7 @@ def _download_server_jar(server_dir: Path, requested_version: str = "latest") ->
     temporary = destination.with_suffix(".jar.new")
     temporary.write_bytes(jar)
     os.replace(temporary, destination)
+    diagnostics.info("Serwer Minecraft %s pobrano i zweryfikowano (SHA-1), rozmiar %s bajtów.", selected, len(jar))
     return destination, required_java, selected, java_executable
 
 
@@ -463,6 +471,8 @@ def _send_packet(sock: socket.socket, packet_id: int, packet_type: int, text: st
 class ParkourServer:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
+        self._last_status_ready: bool | None = None
+        self._last_logged_exit: int | None = None
 
     def settings(self) -> dict[str, Any]:
         try:
@@ -470,6 +480,37 @@ class ParkourServer:
             return value if isinstance(value, dict) else {}
         except (OSError, ValueError, TypeError):
             return {}
+
+    def _server_log_path(self) -> Path | None:
+        server_dir = str(self.settings().get("server_dir", ""))
+        return Path(server_dir) / "giftstream-server.log" if server_dir else None
+
+    def diagnostic_lines(self, limit: int = 100) -> list[str]:
+        """Return a safe, bounded tail of the JVM log for the copyable app diagnostics."""
+        log_path = self._server_log_path()
+        if log_path is None:
+            return []
+        try:
+            # Server logs may grow for the entire stream; seek from the end instead
+            # of loading the whole file whenever the dashboard refreshes diagnostics.
+            with log_path.open("rb") as file:
+                file.seek(0, os.SEEK_END)
+                size = file.tell()
+                file.seek(max(0, size - 256 * 1024), os.SEEK_SET)
+                tail = file.read().decode("utf-8", errors="replace")
+            lines = tail.splitlines()[-max(1, min(limit, 200)):]
+        except OSError:
+            return []
+        return [f"[MINECRAFT] {diagnostics.redact(line)}" for line in lines]
+
+    def clear_diagnostic_logs(self) -> None:
+        log_path = self._server_log_path()
+        if log_path is None or not log_path.exists():
+            return
+        try:
+            log_path.write_text("", encoding="utf-8")
+        except OSError as exc:
+            diagnostics.warning("Nie udało się wyczyścić pliku logu Minecraft %s: %s", log_path, exc)
 
     def setup(self, server_dir: str, player: str, eula_accepted: bool, version: str = "latest") -> dict[str, Any]:
         if not eula_accepted:
@@ -505,12 +546,26 @@ class ParkourServer:
 
         password = secrets.token_urlsafe(24)
         map_stage = root / ".giftstream-world-stage"
+        phase = "sprawdzanie dołączonej mapy"
+        diagnostics.info("Rozpoczynam konfigurację Minecraft Parkour %s dla gracza %s w %s.",
+                         selected_version, player, root)
         try:
             _map_archive()  # Fail before downloading server files if the bundled world is absent.
+            phase = "pobieranie serwera i przygotowanie Java"
+            diagnostics.info("Pobieram oficjalny serwer Minecraft %s i sprawdzam wymagania Java.", selected_version)
             jar, required_java, installed_version, java_executable = _download_server_jar(root, selected_version)
+            diagnostics.info("Serwer pobrany i zweryfikowany; używam Java %s (%s).", required_java, java_executable)
+            phase = "rozpakowywanie mapy"
             map_stage.mkdir()
             _extract_map(_map_archive(), map_stage)
-            os.replace(map_stage / "100 Levels", root / "world")
+            staged_level = map_stage / "level.dat"
+            if not staged_level.is_file():
+                raise FileNotFoundError(f"Po rozpakowaniu mapy brakuje pliku {staged_level}.")
+            # _extract_map deliberately strips the archive's top-level '100 Levels/' folder.
+            # The staging directory itself is the complete world root.
+            os.replace(map_stage, root / "world")
+            diagnostics.info("Mapa 100 Levels rozpakowana i zainstalowana jako %s/world.", root)
+            phase = "zapisywanie konfiguracji serwera"
             (root / "eula.txt").write_text("# Accepted in GiftStream setup\neula=true\n", encoding="ascii")
             _write_server_properties(root / "server.properties", password)
             state = {"server_dir": str(root), "player": player,
@@ -519,22 +574,28 @@ class ParkourServer:
                      "map_version": MAP_VERSION, "java_required": required_java,
                      "java_executable": str(java_executable), "server_jar": str(jar)}
             _write_parkour_settings({**state, "rcon_password": password})
-        except Exception:
+            diagnostics.info("Zapisano konfigurację serwera i zgodę EULA w %s.", root)
+        except Exception as exc:
+            diagnostics.error("Konfiguracja Minecraft Parkour nie powiodła się podczas etapu '%s': %s",
+                              phase, exc, exc_info=exc)
             shutil.rmtree(map_stage, ignore_errors=True)
             shutil.rmtree(root / "world", ignore_errors=True)
             for generated in (root / "server.jar", root / "server.jar.new", root / "eula.txt", root / "server.properties"):
                 try:
                     generated.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                except OSError as cleanup_error:
+                    diagnostics.warning("Nie udało się posprzątać pliku %s: %s", generated, cleanup_error)
             raise
         shutil.rmtree(map_stage, ignore_errors=True)
+        diagnostics.info("Konfiguracja zakończona; uruchamiam serwer Minecraft %s.", installed_version)
         self.start()
         return self.status()
 
     def start(self) -> dict[str, Any]:
         state = self.settings()
         root = Path(str(state.get("server_dir", "")))
+        diagnostics.info("Żądanie uruchomienia serwera Minecraft (wersja %s, katalog %s).",
+                         state.get("minecraft_version", "nieznana"), root)
         jar = root / "server.jar"
         if not jar.is_file() or not (root / "eula.txt").is_file():
             raise RuntimeError("Najpierw utwórz lokalny serwer parkour.")
@@ -545,6 +606,7 @@ class ParkourServer:
         # RCON instead of launching a duplicate on the same port.
         try:
             self._rcon("list")
+            diagnostics.info("Wykryto już działający lokalny serwer Minecraft przez RCON; nie uruchamiam duplikatu.")
             return self.status()
         except Exception:
             pass
@@ -576,6 +638,13 @@ class ParkourServer:
             kwargs["start_new_session"] = True
         try:
             self._process = subprocess.Popen([java, "-Xms1G", "-Xmx2G", "-jar", str(jar), "nogui"], **kwargs)
+            self._last_logged_exit = None
+            self._last_status_ready = None
+            diagnostics.info("Proces serwera Minecraft uruchomiono (PID %s); stdout/stderr zapisuję do %s.",
+                             self._process.pid, root / "giftstream-server.log")
+        except Exception as exc:
+            diagnostics.error("Nie udało się uruchomić procesu serwera Minecraft: %s", exc, exc_info=exc)
+            raise
         finally:
             log.close()
         return self.status()
@@ -587,19 +656,26 @@ class ParkourServer:
         password = str(state.get("rcon_password", ""))
         if host != "127.0.0.1" or not password or not (1 <= port <= 65535):
             raise RuntimeError("Brak bezpiecznej konfiguracji RCON na localhost.")
-        with socket.create_connection((host, port), timeout=3) as sock:
-            sock.settimeout(3)
-            _send_packet(sock, 1, 3, password)
-            packet_id, _packet_type, _ = _recv_packet(sock)
-            if packet_id == -1:
-                raise PermissionError("Serwer odrzucił hasło RCON.")
-            if packet_id != 1:
-                _recv_packet(sock)
-            _send_packet(sock, 2, 2, command)
-            response_id, _response_type, text = _recv_packet(sock)
-            if response_id != 2:
-                raise ConnectionError("Niepoprawna odpowiedź RCON.")
-            return text.strip()
+        command_kind = command.split(maxsplit=1)[0] if command else "<empty>"
+        try:
+            with socket.create_connection((host, port), timeout=3) as sock:
+                sock.settimeout(3)
+                _send_packet(sock, 1, 3, password)
+                packet_id, _packet_type, _ = _recv_packet(sock)
+                if packet_id == -1:
+                    raise PermissionError("Serwer odrzucił hasło RCON.")
+                if packet_id != 1:
+                    _recv_packet(sock)
+                _send_packet(sock, 2, 2, command)
+                response_id, _response_type, text = _recv_packet(sock)
+                if response_id != 2:
+                    raise ConnectionError("Niepoprawna odpowiedź RCON.")
+                return text.strip()
+        except Exception as exc:
+            # Log only the command verb: chat payloads, player data and secrets
+            # must not leak into the copyable diagnostics.
+            diagnostics.warning("Polecenie RCON '%s' nie powiodło się: %s", command_kind, exc)
+            raise
 
     def status(self) -> dict[str, Any]:
         state = self.settings()
@@ -620,7 +696,13 @@ class ParkourServer:
                     "players_online": 0, "players": [], **client_info,
                     "message": "Serwer startuje — pierwsze uruchomienie może potrwać chwilę."}
         if self._process is not None and self._process.poll() is not None:
-            response["message"] = f"Serwer zakończył pracę (kod {self._process.returncode}). Zajrzyj do giftstream-server.log."
+            code = int(self._process.returncode or 0)
+            response["message"] = f"Serwer zakończył pracę (kod {code}). Zajrzyj do giftstream-server.log."
+            if self._last_logged_exit != code:
+                diagnostics.error("Proces serwera Minecraft zakończył pracę z kodem %s. Log JVM: %s",
+                                  code, Path(str(state.get("server_dir", ""))) / "giftstream-server.log")
+                self._last_logged_exit = code
+            self._last_status_ready = False
             return response
         try:
             listing = self._rcon("list")
@@ -630,19 +712,29 @@ class ParkourServer:
                              "players_online": int(player_match.group(1)) if player_match else len(players),
                              "players": players,
                              "message": "Minecraft gotowy · " + (listing or "RCON połączony")})
-        except Exception:
+            if self._last_status_ready is not True:
+                diagnostics.info("Serwer Minecraft jest gotowy i odpowiada przez RCON (%s).", state.get("server_address", "localhost:25565"))
+            self._last_status_ready = True
+        except Exception as exc:
             if self._process is not None and self._process.poll() is None:
                 response["running"] = True
+            if self._last_status_ready is not False:
+                diagnostics.warning("Serwer Minecraft nie jest jeszcze gotowy przez RCON: %s", exc)
+            self._last_status_ready = False
         return response
 
     def stop(self) -> dict[str, Any]:
         if not self.settings():
+            diagnostics.warning("Poproszono o zatrzymanie Minecraft, ale serwer nie jest skonfigurowany.")
             return self.status()
+        diagnostics.info("Wysyłam bezpieczne polecenie zatrzymania lokalnego serwera Minecraft.")
         try:
             self._rcon("stop")
         except Exception as exc:
             if self._process is not None and self._process.poll() is None:
+                diagnostics.error("Nie udało się zatrzymać Minecraft przez RCON: %s", exc, exc_info=exc)
                 raise RuntimeError(f"Nie udało się zatrzymać serwera przez RCON: {exc}") from exc
+        self._last_status_ready = False
         return {**self.status(), "message": "Wysłano polecenie bezpiecznego zamknięcia serwera."}
 
     def command(self, command: str) -> str:
@@ -672,6 +764,7 @@ class ParkourServer:
     def execute_action(self, action: str, player: str | None = None) -> str:
         state = self.settings()
         player = player or str(state.get("player", ""))
+        diagnostics.info("Wykonuję akcję Minecraft '%s' dla gracza %s.", action, player or "nieustawiony")
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Najpierw ustaw nick gracza Minecraft.")
         if action == "parkour_push":
@@ -679,6 +772,7 @@ class ParkourServer:
                         f"execute as {player} at {player} run tp @s ^ ^0.6 ^-3"]
             for command in commands:
                 self._rcon(command)
+            diagnostics.info("Akcja Parkour push zakończona powodzeniem dla gracza %s.", player)
             return "Delikatnie odrzucono gracza o 3 bloki do tyłu."
         if action in {"parkour_level_forward", "parkour_level_back"}:
             areas = map_level_areas()
@@ -694,6 +788,7 @@ class ParkourServer:
                         f"tp {player} {x + dx / 2:.1f} {y} {z + dz / 2:.1f}"]
             for command in commands:
                 self._rcon(command)
+            diagnostics.info("Przeniesiono gracza %s na obszar poziomu %s.", player, target)
             return f"Przeniesiono gracza na obszar poziomu {target}."
         if action == "parkour_jail":
             commands = [f"tp {player} 1001 101 1001",
@@ -703,6 +798,7 @@ class ParkourServer:
                         f"title {player} actionbar {{\"text\":\"WIĘZIENIE · 20 s\",\"color\":\"red\"}}"]
             for command in commands:
                 self._rcon(command)
+            diagnostics.info("Gracz %s został przeniesiony do parkour-jail na 20 sekund.", player)
             return "Gracz trafił na 20 sekund do lobby-więzienia."
         if action in {"parkour_reset", "parkour_antireset"}:
             raise RuntimeError("Reset z odliczaniem jest koordynowany przez GiftStream.")

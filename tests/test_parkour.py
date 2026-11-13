@@ -44,9 +44,8 @@ def test_setup_stores_each_minecraft_version_in_a_separate_world(tmp_path, monke
         return jar, 21, version, Path("/usr/bin/java")
 
     def fake_extract(_archive, stage):
-        world = stage / "100 Levels"
-        world.mkdir(parents=True)
-        (world / "level.dat").write_bytes(b"map data")
+        # _extract_map removes the ZIP's top-level "100 Levels" prefix.
+        (stage / "level.dat").write_bytes(b"map data")
 
     monkeypatch.setattr(parkour_server, "_download_server_jar", fake_download)
     monkeypatch.setattr(parkour_server, "_extract_map", fake_extract)
@@ -73,6 +72,18 @@ def test_bundled_map_has_metadata_and_level_regions():
         assert "100 Levels/datapacks/main/pack.mcmeta" in archive.namelist()
 
 
+def test_map_extract_strips_archive_root_into_world_directory(tmp_path):
+    archive_path = tmp_path / "map.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("100 Levels/level.dat", "metadata")
+        archive.writestr("100 Levels/datapacks/main/pack.mcmeta", "metadata")
+    destination = tmp_path / ".giftstream-world-stage"
+    _extract_map(archive_path, destination)
+    assert (destination / "level.dat").read_text() == "metadata"
+    assert (destination / "datapacks/main/pack.mcmeta").is_file()
+    assert not (destination / "100 Levels").exists()
+
+
 def test_map_extract_rejects_traversal_and_symlinks(tmp_path):
     bad = tmp_path / "bad.zip"
     with zipfile.ZipFile(bad, "w") as archive:
@@ -81,6 +92,22 @@ def test_map_extract_rejects_traversal_and_symlinks(tmp_path):
         archive.writestr("../outside.txt", "not safe")
     with pytest.raises(ValueError, match="ścieżkę"):
         _extract_map(bad, tmp_path / "world")
+
+
+def test_server_diagnostic_tail_includes_jvm_output_and_redacts_secrets(monkeypatch, tmp_path):
+    from app import parkour_server
+
+    server_dir = tmp_path / "server"
+    server_dir.mkdir()
+    (server_dir / "giftstream-server.log").write_text(
+        "Starting minecraft server\nrcon.password=private-secret\n", encoding="utf-8")
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"server_dir": str(server_dir)}), encoding="utf-8")
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", settings)
+    lines = ParkourServer().diagnostic_lines()
+    assert any("Starting minecraft server" in line for line in lines)
+    assert any("rcon.password=[REDACTED]" in line for line in lines)
+    assert all("private-secret" not in line for line in lines)
 
 
 def test_parkour_setup_requires_eula_before_any_download(monkeypatch, tmp_path):

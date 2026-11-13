@@ -77,9 +77,8 @@ def test_invalid_tiktok_username_is_reported_without_starting_a_thread():
 
 
 def test_diagnostic_redaction_removes_authentication_values():
-    message = "Failed wss://example.invalid?apiKey=secret123 access_token:private rcon_password=hidden"
+    message = "Failed ?apiKey=secret123 access_token:private rcon_password=hidden authorization: Bearer bearer-secret"
     redacted = _redact(message)
-    assert "secret123" not in redacted
-    assert "private" not in redacted
-    assert "hidden" not in redacted
-    assert redacted.count("[REDACTED]") == 3
+    for secret in ("secret123", "private", "hidden", "bearer-secret"):
+        assert secret not in redacted
+    assert redacted.count("[REDACTED]") == 4

@@ -26,15 +26,31 @@ def test_builtin_parkour_preset_migrates_only_when_untouched(monkeypatch):
     assert saved == []
 
 
-def test_diagnostics_endpoints_return_and_clear_copyable_logs():
+def test_diagnostics_endpoints_return_and_clear_copyable_logs(monkeypatch):
     from app import diagnostics
 
-    diagnostics.info("TikTok connector test diagnostic")
+    diagnostics.info("Minecraft setup test diagnostic")
+    monkeypatch.setattr(main.parkour_server, "diagnostic_lines", lambda _limit: [
+        "[MINECRAFT] Starting minecraft server", "[MINECRAFT] rcon.password=[REDACTED]"])
     client = TestClient(main.app)
     result = client.get("/api/logs?limit=20")
     assert result.status_code == 200
-    assert any("TikTok connector test diagnostic" in line for line in result.json()["lines"])
+    assert any("Minecraft setup test diagnostic" in line for line in result.json()["lines"])
+    assert any("[MINECRAFT] Starting minecraft server" in line for line in result.json()["lines"])
+    assert client.post("/api/logs/client", json={"source": "test", "message": "UI exception diagnostic"}).json()["ok"] is True
+    assert any("UI exception diagnostic" in line for line in client.get("/api/logs").json()["lines"])
+    assert client.get("/api/does-not-exist").status_code == 404
+    assert any("HTTP GET /api/does-not-exist zakończyło się statusem 404" in line
+               for line in client.get("/api/logs").json()["lines"])
     assert client.post("/api/logs/clear").json()["ok"] is True
+
+
+def test_dashboard_has_shared_diagnostics_panel_and_no_orphaned_bridge_payload():
+    response = TestClient(main.app).get("/")
+    assert response.status_code == 200
+    assert "Logi aplikacji i Minecraft" in response.text
+    assert "Nieobsłużony wyjątek HTTP" not in response.text
+    assert '<span>"action"</span>' not in response.text
 
 
 def test_minecraft_versions_endpoint_returns_official_release_choices(monkeypatch):

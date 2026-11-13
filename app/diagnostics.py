@@ -15,8 +15,8 @@ _LOG_PATH = data_dir() / "giftstream.log"
 _MAX_ENTRIES = 600
 _MAX_ENTRY_CHARS = 8000
 _SECRET_RE = re.compile(
-    r"(?i)(api[_-]?key|access[_-]?token|authorization|cookie|rcon[_-]?password)"
-    r"(\s*[=:]\s*)([^&\s,;]+)"
+    r"(?i)(api[_-]?key|access[_-]?token|authorization|cookie|rcon[._-]?password|password|secret|token)"
+    r"(\s*[=:]\s*)(?:bearer\s+)?([^&\s,;]+)"
 )
 _RING: deque[str] = deque(maxlen=_MAX_ENTRIES)
 _LOCK = threading.RLock()
@@ -28,13 +28,18 @@ def _redact(value: str) -> str:
     return _SECRET_RE.sub(r"\1\2[REDACTED]", value)
 
 
+def redact(value: str) -> str:
+    """Apply the same secret scrubber to external log files before sharing."""
+    return _redact(value)
+
+
 class _RedactFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            record.msg = _redact(record.getMessage())
+            record.msg = _redact(record.getMessage())[:_MAX_ENTRY_CHARS]
             record.args = ()
             if record.exc_info:
-                record.exc_text = _redact(logging.Formatter().formatException(record.exc_info))
+                record.exc_text = _redact(logging.Formatter().formatException(record.exc_info))[:_MAX_ENTRY_CHARS]
         except Exception:
             pass
         return True
