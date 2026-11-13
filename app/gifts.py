@@ -40,7 +40,20 @@ def _load_cache() -> dict[str, dict[str, Any]]:
         return {}
     try:
         data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-        return {str(x.get("id")): x for x in data if x.get("id") is not None}
+        cache = {str(x.get("id")): x for x in data if isinstance(x, dict) and x.get("id") is not None}
+        # Older releases filled viewer Coins from creator diamonds. Keep only explicit
+        # coin prices; invalidate stale estimated values as unknown, never as 0 Coins.
+        for gift in cache.values():
+            try:
+                coins = int(gift.get("coins", 0) or 0)
+            except (TypeError, ValueError):
+                coins = 0
+            if gift.get("coins_estimated") is not False or coins <= 0:
+                gift["coins"] = 0
+                gift["coins_estimated"] = True
+            else:
+                gift["coins"] = coins
+        return cache
     except (OSError, ValueError, TypeError):
         return {}
 
@@ -82,9 +95,9 @@ def record_event(event: TikTokEvent) -> None:
                  "label_pl": label_pl(event.gift_name),
                  "diamonds": event.diamonds or old.get("diamonds", 0),
                  "coins": (event.gift_coins if event.gift_coins > 0 and not event.gift_coins_estimated
-                           else old.get("coins", event.diamonds or old.get("diamonds", 0))),
+                           else old.get("coins", 0) if old.get("coins_estimated") is False else 0),
                  "coins_estimated": (False if event.gift_coins > 0 and not event.gift_coins_estimated
-                                     else old.get("coins_estimated", True)),
+                                     else old.get("coins_estimated") is not False),
                  "image_url": _safe_tiktok_image(event.gift_image_url) or old.get("image_url"),
                  "source": "tiktok-live" if event.source in {"tiktok", "managed"} else event.source,
                  "streakable": old.get("streakable", False)}
@@ -117,11 +130,13 @@ def record_metadata(gift: Any, source: str = "tiktok-live", save: bool = True) -
         diamonds = 0
     explicit_coins = field(gift, "coin_count", "coinCount", "coins")
     try:
-        coins = int(explicit_coins if explicit_coins is not None else diamonds)
+        coins = max(0, int(explicit_coins)) if explicit_coins is not None else 0
     except (TypeError, ValueError):
-        coins = diamonds
+        coins = 0
         explicit_coins = None
-    coins_estimated = explicit_coins is None
+    coins_estimated = explicit_coins is None or coins <= 0
+    if coins_estimated:
+        coins = 0
     try:
         gift_type = field(gift, "type", default=0)
         streakable = bool(field(gift, "streakable", default=gift_type == 1))
@@ -142,10 +157,11 @@ def _popular_rank(gift: Any) -> tuple[int, int, str]:
     name = str(gift.get("name", "")).casefold()
     rank = next((i for i, candidate in enumerate(POPULAR_GIFT_NAMES) if candidate in name), len(POPULAR_GIFT_NAMES))
     try:
-        coins = int(gift.get("coins", gift.get("diamonds", 0)) or 0)
+        coins = int(gift.get("coins", 0) or 0)
     except (TypeError, ValueError):
         coins = 0
-    return rank, coins, name
+    # Unknown prices sort after explicitly priced gifts within the same rank.
+    return rank, coins if coins > 0 and gift.get("coins_estimated") is False else 2**31, name
 
 
 def record_catalog(entries: Any) -> int:
@@ -241,9 +257,14 @@ def list_gifts(query: str = "", sort: str = "price_asc") -> list[dict[str, Any]]
             merged.pop(name_key, None)
     entries = list(merged.values())
     for gift in entries:
-        # Older caches contain only TikTokLive's diamond_count, so expose that as an estimate.
-        gift["coins_estimated"] = bool(gift.get("coins_estimated", "coins" not in gift))
-        gift["coins"] = int(gift.get("coins", gift.get("diamonds", 0)) or 0)
+        # A missing explicit viewer coin price is unknown, not an estimate from diamonds.
+        try:
+            coins = max(0, int(gift.get("coins", 0) or 0))
+        except (TypeError, ValueError):
+            coins = 0
+        verified = gift.get("coins_estimated") is False and coins > 0
+        gift["coins_estimated"] = not verified
+        gift["coins"] = coins if verified else 0
     if query.strip():
         q = query.strip().casefold()
         entries = [g for g in entries if q in str(g.get("name", "")).casefold()
@@ -251,5 +272,5 @@ def list_gifts(query: str = "", sort: str = "price_asc") -> list[dict[str, Any]]
     if sort == "popular":
         return sorted(entries, key=_popular_rank)
     if sort == "price_desc":
-        return sorted(entries, key=lambda g: (-g["coins"], str(g.get("name", "")).casefold()))
-    return sorted(entries, key=lambda g: (g["coins"], str(g.get("name", "")).casefold()))
+        return sorted(entries, key=lambda g: (g["coins"] <= 0, -g["coins"], str(g.get("name", "")).casefold()))
+    return sorted(entries, key=lambda g: (g["coins"] <= 0, g["coins"], str(g.get("name", "")).casefold()))

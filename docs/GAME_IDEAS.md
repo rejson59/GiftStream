@@ -1,33 +1,7 @@
-# Katalog pomysłów na interaktywne gry
+# Obsługiwany tryb gry
 
-Katalog w panelu rozdziela gotowe presety od pomysłów, które wymagają moda lub adaptera. Wbudowana gra „Arena zombie” działa od razu przez WebSocket. Minecraft ma gotowe presety: przetrwanie, parkour, arena widzów kontra streamer i nocna horda; akcje są ograniczone allow-listą ServerTap.
+GiftStream udostępnia obecnie wyłącznie gotową integrację **Minecraft Parkour 100 Levels**. Inne gry i presety zostały usunięte z katalogu aplikacji.
 
-## Dodatkowe tryby do zaprojektowania
+GiftStream pobiera oficjalny serwer Minecraft 26.2 podczas konfiguracji, instaluje dołączony świat z datapackiem mapy i steruje akcjami przez lokalny, zabezpieczony losowym hasłem RCON. Nie instaluje pluginów, których zgodność z tą wersją serwera nie została potwierdzona.
 
-### Minecraft
-- **Przetrwanie:** prezenty przywołują moby, dają ekwipunek lub pomagają graczowi.
-- **Parkour:** widzowie dodają przeszkody, zmieniają checkpointy lub wybierają skróty.
-- **Arena mobów:** fale przeciwników, bossy, przerwy na nagrody i ranking.
-- **King of the Hill:** publiczność wzmacnia jedną ze stron i modyfikuje arenę.
-
-### 7 Days to Die — obrona przed hordą
-Zdarzenia mogą przyspieszać nadejście nocy, dodawać przeciwników, uzupełniać amunicję albo zmieniać zapasy. Wymaga adaptera/moda, który interpretuje wyłącznie bezpieczne akcje.
-
-### GTA V — chaos w trybie fabularnym/offline
-Proponowane akcje: zmiana pogody, losowy pojazd, krótki pościg albo wyzwanie jazdy. Projektujemy to z myślą o trybie offline i modach single-player, nie o omijaniu anti-cheata ani zakłócaniu gry online.
-
-### Raft — wspólna tratwa
-Widzowie mogą dostarczać materiały i żywność, rozpoczynać ataki rekina lub głosować nad ulepszeniem. Wymaga lokalnego moda/adaptera.
-
-### Valheim — wyprawa i bossowie
-Prezenty uruchamiają błogosławieństwa, przeciwników, zmianę pogody lub boss event; wartości powinny być ograniczane przez cooldown i bezpieczny preset.
-
-### Roblox — minigry twórcy
-Tor przeszkód, arena, wyścig lub King of the Hill. Najbezpieczniejsza droga to własna gra i własny, uwierzytelniony endpoint serwerowy.
-
-## Jak dodawać kolejne gry
-
-1. Opisać konkretny tryb i limity akcji.
-2. Zbudować lokalny adapter/plugin z allow-listą, bez dowolnego wykonywania poleceń.
-3. Dodać mapowanie `GameAction → API/mod` oraz preset startowy.
-4. Przetestować tryb bez live, a potem z symulatorem giftów.
+Instrukcje instalacji, EULA, wymagań Javy, cen monet i opcjonalnego przekazywania czatu opisuje [`MINECRAFT.md`](MINECRAFT.md).

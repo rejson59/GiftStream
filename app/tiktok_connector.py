@@ -16,6 +16,7 @@ import asyncio
 import os
 import random
 import threading
+import time
 from collections.abc import Awaitable, Callable
 
 from .models import GIFT_CATALOG, TikTokEvent
@@ -37,6 +38,7 @@ class TikTokConnector:
         self._task: asyncio.Task | None = None
         self._thread: threading.Thread | None = None
         self._stop = asyncio.Event()
+        self._tt_stop = threading.Event()
 
     # ------------------------------------------------------------------
     async def start(self, mode: str, username: str = "") -> dict:
@@ -44,6 +46,7 @@ class TikTokConnector:
         self.mode = mode
         self.username = username.lstrip("@")
         self._stop = asyncio.Event()
+        self._tt_stop = threading.Event()
         if mode == "simulator":
             self._task = asyncio.create_task(self._simulator_loop())
             self.connected = True
@@ -57,6 +60,7 @@ class TikTokConnector:
     async def stop(self) -> None:
         self.connected = False
         self._stop.set()
+        self._tt_stop.set()
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -130,7 +134,8 @@ class TikTokConnector:
             from TikTokLive import TikTokLiveClient  # type: ignore
             from TikTokLive.events import (  # type: ignore
                 CommentEvent, ConnectEvent, DisconnectEvent, FollowEvent,
-                GiftEvent, LikeEvent, RoomUserSeqEvent,
+                GiftEvent, JoinEvent, LikeEvent, RoomUserSeqEvent, ShareEvent,
+                SubNotifyEvent,
             )
         except ImportError:
             return {"ok": False,
@@ -210,16 +215,46 @@ class TikTokConnector:
                              user=getattr(event.user, "unique_id", "unknown"),
                              nickname=getattr(event.user, "nickname", ""), source="tiktok"))
 
+        @client.on(JoinEvent)
+        async def _on_join(event):  # noqa: ANN001
+            user = getattr(event, "user", None)
+            emit(TikTokEvent(type="join",
+                             user=getattr(user, "unique_id", "unknown"),
+                             nickname=getattr(user, "nickname", ""), source="tiktok"))
+
+        @client.on(ShareEvent)
+        async def _on_share(event):  # noqa: ANN001
+            user = getattr(event, "user", None)
+            emit(TikTokEvent(type="share",
+                             user=getattr(user, "unique_id", "unknown"),
+                             nickname=getattr(user, "nickname", ""), source="tiktok"))
+
+        @client.on(SubNotifyEvent)
+        async def _on_subscribe(event):  # noqa: ANN001
+            user = getattr(event, "user", None)
+            emit(TikTokEvent(type="subscribe",
+                             user=getattr(user, "unique_id", "unknown"),
+                             nickname=getattr(user, "nickname", ""), source="tiktok"))
+
         @client.on(RoomUserSeqEvent)
         async def _on_viewers(event):  # noqa: ANN001
             emit(TikTokEvent(type="join", user="system", nickname="",
                              viewer_count=getattr(event, "viewer_count", 0) or 0, source="tiktok"))
 
         def _run() -> None:
-            try:
-                client.run(fetch_gift_info=True)
-            except Exception:
+            # The upstream TikTok client is unofficial and connections can drop.
+            # Retry with bounded backoff; never claim event delivery is guaranteed.
+            attempt = 0
+            while not self._tt_stop.is_set():
+                try:
+                    client.run(fetch_gift_info=True)
+                except Exception:
+                    self.connected = False
+                if self._tt_stop.is_set():
+                    break
                 self.connected = False
+                attempt += 1
+                self._tt_stop.wait(min(30, 2 ** min(attempt, 5)))
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()

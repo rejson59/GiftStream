@@ -26,14 +26,42 @@ def test_builtin_parkour_preset_migrates_only_when_untouched(monkeypatch):
     assert saved == []
 
 
-def test_public_config_never_returns_integration_secrets(monkeypatch):
-    monkeypatch.setattr(main, "config", AppConfig(minecraft_api_key="mc-private", bridge_webhook_secret="bridge-private"))
+def test_statistics_endpoints_clear_history_or_reset_session_totals(monkeypatch, tmp_path):
+    from app import bridge
+
+    monkeypatch.setattr(bridge, "EVENTS_FILE", tmp_path / "events.jsonl")
+    main.hub.recent_events[:] = [{"type": "gift"}]
+    main.hub.recent_actions[:] = [{"action": "jump"}]
+    main.hub.donors.clear()
+    main.hub.donors["viewer"] = {"user": "viewer", "diamonds": 12, "gifts": 1, "last": "Rose"}
+    main.hub.total_diamonds, main.hub.total_gifts = 12, 1
+    main.hub.viewer_count, main.hub.total_likes = 3, 8
+    main.engine.stats.update(events=9, actions=4, cooldown_skips=2)
+    bridge.EVENTS_FILE.write_text('{"action":"jump"}\\n', encoding="utf-8")
+    client = TestClient(main.app)
+    assert client.post("/api/stats/clear-activity").status_code == 200
+    snapshot = client.get("/api/snapshot").json()
+    assert snapshot["recent_events"] == snapshot["recent_actions"] == []
+    assert snapshot["total_diamonds"] == 12 and snapshot["total_gifts"] == 1
+    assert bridge.EVENTS_FILE.read_text(encoding="utf-8") == ""
+
+    assert client.post("/api/stats/reset").status_code == 200
+    snapshot = client.get("/api/snapshot").json()
+    assert snapshot["total_diamonds"] == snapshot["total_gifts"] == 0
+    assert snapshot["total_likes"] == snapshot["viewer_count"] == 0
+    assert snapshot["top_donors"] == []
+    assert main.engine.stats == {"events": 0, "actions": 0, "cooldown_skips": 0}
+    # Keep shared globals clean for the rest of the suite.
+    main.hub.reset_stats()
+    main.engine.reset_stats()
+
+
+def test_public_config_never_returns_webhook_secret(monkeypatch):
+    monkeypatch.setattr(main, "config", AppConfig(bridge_webhook_secret="bridge-private"))
     response = TestClient(main.app).get("/api/config")
     assert response.status_code == 200
     data = response.json()
-    assert "minecraft_api_key" not in data
     assert "bridge_webhook_secret" not in data
-    assert data["minecraft_has_key"] is True
     assert data["bridge_has_secret"] is True
 
 
@@ -63,13 +91,31 @@ def test_download_info_returns_the_single_application_executable(monkeypatch):
     main._DOWNLOAD_INFO_CACHE.update(original_cache)
 
 
-def test_game_catalog_exposes_ready_modes_without_server_rules():
-    result = TestClient(main.app).get("/api/games").json()
-    by_id = {game["id"]: game for game in result}
-    assert by_id["giftstream-zombie-arena"]["game_url"] == "/game"
-    assert by_id["minecraft-parkour"]["status"] == "bridge"
-    assert "rules" not in by_id["minecraft-parkour"]
-    assert by_id["lethal-company"]["status"] == "idea"
+def test_legacy_game_catalog_is_not_exposed():
+    assert TestClient(main.app).get("/api/games").status_code == 404
+
+
+def test_myinstants_search_endpoint_returns_results_and_caveat(monkeypatch):
+    monkeypatch.setattr(main, "search_myinstants", lambda query: [{"name": query, "url": "https://www.myinstants.com/media/sounds/test.mp3"}])
+    response = TestClient(main.app).get("/api/sounds/myinstants", params={"q": "hello"})
+    assert response.status_code == 200
+    assert response.json()["results"][0]["name"] == "hello"
+    assert "nieoficjalnego" in response.json()["notice"]
+
+
+def test_non_parkour_presets_are_not_listed_or_activated():
+    client = TestClient(main.app)
+    assert client.post("/api/presets").status_code == 405
+    assert client.post("/api/presets/default/activate").status_code == 404
+
+
+def test_supported_actions_are_limited_to_parkour():
+    response = TestClient(main.app).get("/api/actions")
+    assert response.status_code == 200
+    assert {item["id"] for item in response.json()} == {
+        "parkour_push", "parkour_level_forward", "parkour_level_back",
+        "parkour_jail", "parkour_reset", "parkour_antireset",
+    }
 
 
 def test_gift_catalog_refresh_endpoint_returns_latest_catalog(monkeypatch):

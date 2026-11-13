@@ -17,9 +17,9 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .minecraft import PLAYER_RE
 from .paths import bundle_root, data_dir
 
+PLAYER_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 MAP_FILENAME = "100-levels-5229-v1.7.4.zip"
 MAP_VERSION = "26.2"
 SETTINGS_PATH = data_dir() / "minecraft_parkour.json"
@@ -282,6 +282,7 @@ class ParkourServer:
                     "server_address": state.get("server_address", "127.0.0.1:25565"),
                     "server_dir": state.get("server_dir", ""), "player": state.get("player", ""),
                     "map_version": state.get("map_version", MAP_VERSION),
+                    "chat_relay_enabled": bool(state.get("chat_relay_enabled", False)),
                     "message": "Serwer startuje — pierwsze uruchomienie może potrwać chwilę."}
         if self._process is not None and self._process.poll() is not None:
             response["message"] = f"Serwer zakończył pracę (kod {self._process.returncode}). Zajrzyj do giftstream-server.log."
@@ -307,6 +308,18 @@ class ParkourServer:
 
     def command(self, command: str) -> str:
         return self._rcon(command)
+
+    def relay_chat(self, message: str) -> str:
+        """Relay plain TikTok chat text to Minecraft without interpreting it as a command."""
+        if not isinstance(message, str) or not message:
+            raise ValueError("Wiadomość czatu jest pusta.")
+        if len(message) > 2000:
+            raise ValueError("Wiadomość czatu przekracza bezpieczny limit 2000 znaków.")
+        # Tellraw's JSON text component safely encodes quotes, slashes and command
+        # characters as data. Preserve the message text (including punctuation and
+        # Unicode) exactly; never prepend a username or pass it through RCON raw.
+        component = json.dumps({"text": message}, ensure_ascii=False, separators=(",", ":"))
+        return self._rcon(f"tellraw @a {component}")
 
     def get_player_level(self, player: str) -> int:
         if not PLAYER_RE.fullmatch(player or ""):

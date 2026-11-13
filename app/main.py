@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
@@ -25,14 +24,14 @@ from . import earnings as earnings_tracker
 from .bridge import Hub
 from .engine import Engine
 from .gifts import coin_price_for_gift, list_gifts, record_event, refresh_tiktok_catalog
-from .games import GAMES, get_game
-from .minecraft import ServerTapClient, validate_base_url
+from .games import get_game
 from .parkour_server import ParkourServer
 from .models import AppConfig, GameAction, Preset, TikTokEvent
 from .paths import bundle_root, data_dir, installed_release_tag
 from .tiktok_connector import TikTokConnector
 from .version import VERSION
 from . import update_state
+from .myinstants import search as search_myinstants
 
 load_dotenv()
 ROOT = bundle_root()
@@ -61,21 +60,9 @@ class SimulateRequest(BaseModel):
     comment: str | None = None
 
 
-class PresetCopyRequest(BaseModel):
-    new_id: str
-    new_name: str
-
-
 class EarningsSettingsRequest(BaseModel):
     usd_per_diamond: float = Field(gt=0, le=1)
     usd_to_pln: float | None = Field(default=None, gt=0, le=100)
-
-
-class MinecraftSettingsRequest(BaseModel):
-    base_url: str = ""
-    api_key: str = ""
-    player: str = ""
-    enabled: bool = False
 
 
 class ParkourSetupRequest(BaseModel):
@@ -89,6 +76,10 @@ class ParkourActionRequest(BaseModel):
     player: str | None = None
 
 
+class ParkourChatRelayRequest(BaseModel):
+    enabled: bool = False
+
+
 async def publish_game_action(action: GameAction) -> None:
     await hub.publish_action(action)
     if action.action.startswith("parkour_"):
@@ -96,16 +87,9 @@ async def publish_game_action(action: GameAction) -> None:
             await _run_parkour_action(action)
         except Exception as exc:
             await hub.publish_status({"parkour_result": {"ok": False, "message": str(exc)}})
-    if config.minecraft_enabled and not action.action.startswith("parkour_"):
-        try:
-            result = await minecraft_bridge.send(action.action, action.params)
-            await hub.publish_status({"minecraft_result": result})
-        except Exception as exc:
-            await hub.publish_status({"minecraft_result": {"ok": False, "message": str(exc)}})
 
 
 hub = Hub()
-minecraft_bridge = ServerTapClient()
 parkour_server = ParkourServer()
 parkour_reset_task: asyncio.Task | None = None
 parkour_reset_player = ""
@@ -194,6 +178,12 @@ async def process_event(ev: TikTokEvent) -> None:
                 ev.gift_coins_estimated = estimated
     record_event(ev)
     await hub.publish_event(ev)
+    if (ev.type == "comment" and ev.source == "tiktok" and ev.comment
+            and parkour_server.settings().get("chat_relay_enabled")):
+        try:
+            await asyncio.to_thread(parkour_server.relay_chat, ev.comment)
+        except Exception as exc:
+            await hub.publish_status({"parkour_chat_relay_error": str(exc)})
     await engine.handle(ev)
 
 
@@ -239,17 +229,9 @@ def save_config() -> None:
 
 def public_config() -> dict:
     data = config.model_dump()
-    data.pop("minecraft_api_key", None)
     data.pop("bridge_webhook_secret", None)
-    data["minecraft_has_key"] = bool(config.minecraft_api_key)
     data["bridge_has_secret"] = bool(config.bridge_webhook_secret or os.getenv("GIFTSTREAM_BRIDGE_WEBHOOK_SECRET", ""))
     return data
-
-
-def sync_minecraft_client() -> None:
-    minecraft_bridge.base_url = config.minecraft_servertap_url
-    minecraft_bridge.api_key = config.minecraft_api_key
-    minecraft_bridge.player = config.minecraft_player
 
 
 def _refresh_catalog_safely() -> int:
@@ -292,9 +274,14 @@ def _migrate_builtin_parkour_preset() -> bool:
 @app.on_event("startup")
 async def startup() -> None:
     global config, _catalog_refresh_task, _catalog_refresh_started, _currency_refresh_task, _gift_refresh_loop_task
-    preset_store.ensure_default()
     config = read_config()
-    sync_minecraft_client()
+    parkour_game = get_game("minecraft-parkour")
+    if parkour_game and preset_store.get_preset(parkour_game["preset_id"]) is None:
+        preset_store.save_preset(Preset(id=parkour_game["preset_id"], name=parkour_game["title"],
+                                        description=parkour_game["description"], rules=parkour_game["rules"]))
+    if parkour_game and config.active_preset_id != parkour_game["preset_id"]:
+        config.active_preset_id = parkour_game["preset_id"]
+        save_config()
     _migrate_builtin_parkour_preset()
     engine.load_preset(config.active_preset_id)
     # TikTok's public catalog is loaded once in the background; the panel remains usable offline.
@@ -334,10 +321,6 @@ async def shutdown() -> None:
 async def dashboard() -> Any:
     return FileResponse(WEB / "index.html")
 
-@app.get("/game", response_class=HTMLResponse)
-async def game() -> Any:
-    return FileResponse(WEB / "game.html")
-
 @app.get("/overlay", response_class=HTMLResponse)
 async def overlay() -> Any:
     return FileResponse(WEB / "overlay.html")
@@ -354,6 +337,18 @@ app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 
 # -- API -------------------------------------------------------------------
+@app.get("/api/sounds/myinstants")
+async def myinstants_search(q: str = "") -> dict[str, Any]:
+    if len(q) > 100:
+        raise HTTPException(400, "Wyszukiwana fraza może mieć maksymalnie 100 znaków.")
+    if not q.strip():
+        return {"results": [], "notice": "Wyszukiwarka MyInstants jest nieoficjalna i może okresowo przestać działać."}
+    try:
+        results = await asyncio.to_thread(search_myinstants, q)
+    except Exception as exc:
+        raise HTTPException(502, f"Nie udało się pobrać wyników MyInstants: {exc}") from exc
+    return {"results": results, "notice": "Wyniki pochodzą z nieoficjalnego wyszukiwania MyInstants; dostępność plików może się zmieniać."}
+
 @app.get("/api/health")
 async def health() -> dict:
     return {"ok": True, "app": "GiftStream", "version": installed_release_tag()}
@@ -432,6 +427,20 @@ async def snapshot() -> dict:
             "preset": engine.active_preset.model_dump() if engine.active_preset else None,
             "stats": engine.stats, "config": public_config()}
 
+@app.post("/api/stats/clear-activity")
+async def clear_activity() -> dict[str, Any]:
+    hub.clear_activity()
+    await hub.broadcast_snapshot()
+    return {"ok": True, "message": "Wyczyszczono listę aktywności. Liczniki statystyk pozostały bez zmian."}
+
+@app.post("/api/stats/reset")
+async def reset_stats() -> dict[str, Any]:
+    hub.reset_stats()
+    engine.reset_stats()
+    await hub.broadcast_snapshot()
+    await hub.publish_status({"stats_reset": True})
+    return {"ok": True, "message": "Wyzerowano wszystkie statystyki bieżącej sesji."}
+
 @app.get("/api/config")
 async def get_config() -> dict:
     return public_config()
@@ -460,7 +469,6 @@ async def update_config(data: dict[str, Any]) -> dict:
         config = AppConfig(**merged)
     except ValidationError as exc:
         raise HTTPException(422, detail=exc.errors()) from exc
-    sync_minecraft_client()
     save_config()
     return public_config()
 
@@ -489,67 +497,12 @@ async def refresh_earnings_rate() -> dict[str, Any]:
         return {"ok": False, "settings": earnings_tracker.get_settings(),
                 "message": f"Nie udało się pobrać najnowszego kursu NBP: {exc}"}
 
-@app.get("/api/games")
-async def games() -> list[dict]:
-    return [{key: value for key, value in game.items() if key != "rules"} for game in GAMES]
-
-@app.post("/api/games/{game_id}/preset")
-async def create_game_preset(game_id: str) -> dict:
-    global config
-    game = get_game(game_id)
-    if game is None:
-        raise HTTPException(404, "Nie znaleziono gry")
-    if not game.get("rules"):
-        raise HTTPException(400, "Ten pomysł nie ma jeszcze gotowego presetu — użyj go jako inspiracji.")
-    preset_id = game["preset_id"]
-    preset = Preset(id=preset_id, name=game["title"], description=game["description"], rules=game["rules"])
-    if preset_store.get_preset(preset_id) is None:
-        preset_store.save_preset(preset)
-    engine.load_preset(preset_id)
-    config.active_preset_id = preset_id
-    save_config()
-    return {"ok": True, "preset": engine.active_preset.model_dump()}
-
-@app.get("/api/integrations/minecraft")
-async def minecraft_status() -> dict:
-    return {"enabled": config.minecraft_enabled, "configured": minecraft_bridge.configured,
-            "base_url": config.minecraft_servertap_url, "player": config.minecraft_player,
-            "has_key": bool(config.minecraft_api_key), "integration": "ServerTap"}
-
-@app.put("/api/integrations/minecraft")
-async def update_minecraft_settings(req: MinecraftSettingsRequest) -> dict:
-    global config
-    try:
-        base_url = validate_base_url(req.base_url) if req.base_url.strip() else ""
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    player = req.player.strip()
-    if req.enabled and (not base_url or not (req.api_key.strip() or config.minecraft_api_key) or not player):
-        raise HTTPException(400, "Aby włączyć integrację, podaj adres ServerTap, klucz API i nick gracza.")
-    merged = config.model_dump()
-    merged.update({"minecraft_servertap_url": base_url,
-                   "minecraft_player": player,
-                   "minecraft_enabled": req.enabled})
-    if req.api_key.strip():
-        merged["minecraft_api_key"] = req.api_key.strip()
-    config = AppConfig(**merged)
-    sync_minecraft_client()
-    save_config()
-    return await minecraft_status()
-
-@app.post("/api/integrations/minecraft/test")
-async def test_minecraft_connection() -> dict:
-    try:
-        return await minecraft_bridge.check()
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except httpx.RequestError as exc:
-        return {"ok": False, "message": f"Nie udało się połączyć z ServerTap: {exc}"}
-
 @app.get("/api/minecraft/parkour")
 async def parkour_status() -> dict[str, Any]:
+    settings = parkour_server.settings()
     status = await asyncio.to_thread(parkour_server.status)
-    status["enabled"] = bool(parkour_server.settings().get("enabled"))
+    status["enabled"] = bool(settings.get("enabled"))
+    status["chat_relay_enabled"] = bool(settings.get("chat_relay_enabled"))
     return status
 
 @app.post("/api/minecraft/parkour/setup")
@@ -585,7 +538,22 @@ async def parkour_enabled(request: dict[str, bool]) -> dict[str, Any]:
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(state, indent=2), encoding="utf-8")
     temporary.replace(path)
-    return {**await asyncio.to_thread(parkour_server.status), "enabled": state["enabled"]}
+    return {**await asyncio.to_thread(parkour_server.status),
+            "enabled": state["enabled"],
+            "chat_relay_enabled": bool(state.get("chat_relay_enabled"))}
+
+@app.put("/api/minecraft/parkour/chat-relay")
+async def parkour_chat_relay(req: ParkourChatRelayRequest) -> dict[str, Any]:
+    state = parkour_server.settings()
+    if not state.get("server_dir"):
+        raise HTTPException(400, "Najpierw skonfiguruj lokalny serwer parkour.")
+    state["chat_relay_enabled"] = req.enabled
+    path = DATA / "minecraft_parkour.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+    return {"ok": True, "chat_relay_enabled": req.enabled}
 
 @app.post("/api/minecraft/parkour/action")
 async def parkour_test_action(req: ParkourActionRequest) -> dict[str, Any]:
@@ -598,30 +566,26 @@ async def parkour_test_action(req: ParkourActionRequest) -> dict[str, Any]:
 @app.get("/api/actions")
 async def actions() -> list[dict]:
     from .models import KNOWN_ACTIONS
-    labels = {"spawn_zombie":"Przywołaj zombie", "spawn_enemy":"Przywołaj przeciwnika",
-              "spawn_boss":"Przywołaj bossa", "boss_raid":"Fala bossów", "heal":"Ulecz gracza",
-              "drop_diamond":"Upuść diament", "drop_item":"Upuść przedmiot", "give_item":"Daj przedmiot",
-              "move_left":"Ruch w lewo", "move_right":"Ruch w prawo", "jump":"Skok", "shield":"Tarcza",
-              "speed_boost":"Przyspieszenie", "teleport":"Teleport", "spawn_wall":"Stwórz przeszkodę",
-              "change_weather":"Zmień pogodę", "change_time":"Zmień porę dnia", "screen_shake":"Trzęsienie ekranu",
-              "confetti":"Konfetti", "vote":"Głosowanie", "custom":"Akcja własna"}
-    labels.update({"parkour_push":"Parkour: delikatny push", "parkour_level_forward":"Parkour: kolejny poziom", "parkour_level_back":"Parkour: poprzedni poziom",
-                   "parkour_jail":"Parkour: więzienie", "parkour_reset":"Parkour: reset za 60 s",
-                   "parkour_antireset":"Parkour: anty-reset"})
-    return [{"id": x, "label": labels.get(x, x.replace("_", " ").title())} for x in KNOWN_ACTIONS]
+    labels = {
+        "parkour_push": "Parkour: delikatny push",
+        "parkour_level_forward": "Parkour: kolejny poziom",
+        "parkour_level_back": "Parkour: poprzedni poziom",
+        "parkour_jail": "Parkour: więzienie",
+        "parkour_reset": "Parkour: reset za 60 s",
+        "parkour_antireset": "Parkour: anty-reset",
+    }
+    return [{"id": action, "label": labels[action]} for action in KNOWN_ACTIONS]
 
 @app.get("/api/presets")
 async def list_presets() -> list[dict]:
-    return [p.model_dump() for p in preset_store.list_presets()]
-
-@app.post("/api/presets")
-async def create_preset(preset: Preset) -> dict:
-    if preset_store.get_preset(preset.id):
-        raise HTTPException(409, "Preset ID już istnieje")
-    return preset_store.save_preset(preset).model_dump()
+    # Show only the supported Minecraft Parkour flow, not legacy game presets.
+    preset = preset_store.get_preset("minecraft-parkour")
+    return [preset.model_dump()] if preset else []
 
 @app.get("/api/presets/{preset_id}")
 async def get_preset(preset_id: str) -> dict:
+    if preset_id != "minecraft-parkour":
+        raise HTTPException(404, "Nie znaleziono presetu")
     p = preset_store.get_preset(preset_id)
     if p is None:
         raise HTTPException(404, "Nie znaleziono presetu")
@@ -629,6 +593,8 @@ async def get_preset(preset_id: str) -> dict:
 
 @app.put("/api/presets/{preset_id}")
 async def update_preset(preset_id: str, preset: Preset) -> dict:
+    if preset_id != "minecraft-parkour":
+        raise HTTPException(404, "Nie znaleziono presetu")
     if preset.id != preset_id:
         raise HTTPException(400, "ID w URL i body muszą być takie same")
     saved = preset_store.save_preset(preset)
@@ -636,20 +602,10 @@ async def update_preset(preset_id: str, preset: Preset) -> dict:
         engine.load_preset(preset_id)
     return saved.model_dump()
 
-@app.delete("/api/presets/{preset_id}")
-async def remove_preset(preset_id: str) -> dict:
-    if preset_id == "default":
-        raise HTTPException(400, "Nie można usunąć domyślnego presetu")
-    if not preset_store.delete_preset(preset_id):
-        raise HTTPException(404, "Nie znaleziono presetu")
-    if engine.active_preset and engine.active_preset.id == preset_id:
-        engine.load_preset("default")
-        config.active_preset_id = "default"
-        save_config()
-    return {"ok": True}
-
 @app.post("/api/presets/{preset_id}/activate")
 async def activate_preset(preset_id: str) -> dict:
+    if preset_id != "minecraft-parkour":
+        raise HTTPException(404, "Nie znaleziono presetu")
     preset = engine.load_preset(preset_id)
     if preset is None:
         raise HTTPException(404, "Nie znaleziono presetu")
@@ -657,15 +613,6 @@ async def activate_preset(preset_id: str) -> dict:
     save_config()
     await hub.publish_status({"active_preset_id": preset_id, "active_preset_name": preset.name})
     return {"ok": True, "preset": preset.model_dump()}
-
-@app.post("/api/presets/{preset_id}/duplicate")
-async def duplicate_preset(preset_id: str, req: PresetCopyRequest) -> dict:
-    if preset_store.get_preset(req.new_id):
-        raise HTTPException(409, "Preset ID już istnieje")
-    p = preset_store.duplicate_preset(preset_id, req.new_id, req.new_name)
-    if p is None:
-        raise HTTPException(404, "Nie znaleziono presetu")
-    return p.model_dump()
 
 @app.post("/api/rules/{rule_id}/test")
 async def test_rule(rule_id: str) -> dict:

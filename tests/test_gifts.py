@@ -11,7 +11,18 @@ def test_catalog_merges_real_gift_image_and_searches_by_localized_name(tmp_path,
     rose = next(g for g in gifts.list_gifts("rose") if g.get("id") == 801)
     assert rose["image_url"] == "https://p16-webcast.tiktokcdn.com/gift.png"
     assert rose["source"] == "tiktok-live"
+    assert rose["coins"] == 0
+    assert rose["coins_estimated"] is True
     assert gifts.list_gifts("not-a-gift") == []
+
+
+def test_older_diamond_based_coin_prices_are_invalidated_on_cache_load(tmp_path, monkeypatch):
+    path = tmp_path / "gifts.json"
+    path.write_text('[{"id": 44, "name": "Old Estimate", "diamonds": 100, "coins": 100, "coins_estimated": true}]', encoding="utf-8")
+    monkeypatch.setattr(gifts, "CACHE_PATH", path)
+    cache = gifts._load_cache()
+    assert cache["44"]["coins"] == 0
+    assert cache["44"]["coins_estimated"] is True
 
 
 def test_catalog_prices_are_exposed_as_coins_and_sort_options_work(tmp_path, monkeypatch):
@@ -21,8 +32,8 @@ def test_catalog_prices_are_exposed_as_coins_and_sort_options_work(tmp_path, mon
     cheap = gifts.list_gifts(sort="price_asc")
     expensive = gifts.list_gifts(sort="price_desc")
     assert popular[0]["name"] == "Rose"
-    assert cheap[0]["coins"] == 1
-    assert expensive[0]["coins"] >= cheap[0]["coins"]
+    assert all(gift["coins"] == 0 and gift["coins_estimated"] for gift in cheap)
+    assert all(gift["coins"] == 0 for gift in expensive)
     assert all("coins" in gift for gift in popular)
 
 
@@ -40,7 +51,7 @@ def test_catalog_prefers_explicit_coin_cost_when_available(tmp_path, monkeypatch
 def test_coin_price_lookup_never_claims_estimated_diamond_values_as_purchase_coins(tmp_path, monkeypatch):
     monkeypatch.setattr(gifts, "CACHE_PATH", tmp_path / "gifts.json")
     monkeypatch.setattr(gifts, "_seen", {})
-    assert gifts.coin_price_for_gift(None, "Rose") == (1, True)
+    assert gifts.coin_price_for_gift(None, "Rose") == (0, True)
     gifts.record_metadata({"id": 813, "name": "Verified Coin Gift", "coin_count": 45,
                            "diamond_count": 9, "image": {"url_list": []}}, save=False)
     assert gifts.coin_price_for_gift(813, "Verified Coin Gift") == (45, False)
@@ -70,7 +81,7 @@ def test_public_catalog_keeps_100_popular_gifts_with_real_tiktok_art(tmp_path, m
     assert all(gift["source"] == "tiktok-catalog" and gift["image_url"].startswith("https://") for gift in catalog)
     rose = next(gift for gift in catalog if gift["name"] == "Rose")
     assert rose["id"] == 1000
-    assert rose["coins"] == 1
+    assert rose["coins"] == 0
     assert rose["coins_estimated"] is True
     assert len(list((tmp_path).glob("gifts.json"))) == 1
 

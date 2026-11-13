@@ -1,11 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
   <title id="title">GiftStream</title>
-  <rect x="3" y="3" width="58" height="58" rx="16" fill="#111418" stroke="#354225" stroke-width="2"/>
-  <path d="M17 29h30v25a4 4 0 0 1-4 4H21a4 4 0 0 1-4-4z" fill="#c8f36a"/>
-  <path d="M17 39h30v5H17z" fill="#17200f"/>
-  <path d="M29 29h6v29h-6z" fill="#17200f"/>
-  <rect x="14" y="23" width="36" height="9" rx="3" fill="#dcffa0"/>
-  <circle cx="24" cy="18" r="7" fill="none" stroke="#dcffa0" stroke-width="5"/>
-  <circle cx="40" cy="18" r="7" fill="none" stroke="#dcffa0" stroke-width="5"/>
-  <circle cx="32" cy="22" r="4.5" fill="#a6df35"/>
+  <rect x="12" y="12" width="232" height="232" rx="61" fill="#111315" stroke="#303b1d" stroke-width="4"/>
+  <path d="M52 123h152v62a22 22 0 0 1-22 22H74a22 22 0 0 1-22-22z" fill="#c1f32a"/>
+  <path d="M52 135h152v19H52z" fill="#111315"/>
+  <path d="M116 81h24v126h-24z" fill="#111315"/>
+  <rect x="42" y="92" width="173" height="36" rx="13" fill="#d8ff78"/>
+  <path fill="#c9fb58" fill-rule="evenodd" d="M100 48a27 27 0 1 0 0 54 27 27 0 1 0 0-54zm0 14a13 13 0 1 1 0 26 13 13 0 1 1 0-26zm56-14a27 27 0 1 0 0 54 27 27 0 1 0 0-54zm0 14a13 13 0 1 1 0 26 13 13 0 1 1 0-26z"/>
+  <circle cx="128" cy="86" r="17" fill="#b4e93a"/>
 </svg>

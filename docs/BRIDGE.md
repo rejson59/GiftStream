@@ -1,29 +1,12 @@
-# GiftStream Game Bridge
+# GiftStream event bridge
 
-The bridge sends normalized actions to supported games. Choose one or combine several.
+GiftStream ships one ready-to-run game integration: **Minecraft Parkour 100 Levels**. The generic event bridge remains available for local tools and custom integrations; it is not a bundled game or a claim of support for additional games.
 
-## 1. Browser game (WebSocket)
+## WebSocket feed
 
-Open `http://localhost:8000/game`. The game connects to `/ws/game` and receives JSON frames:
+Connect to `ws://localhost:8000/ws/feed` (use `wss://` behind HTTPS). The feed emits `snapshot`, `event`, `action`, and `status` JSON frames for the GiftStream dashboard and local tools.
 
-```json
-{
-  "kind": "action",
-  "data": {
-    "action": "spawn_zombie",
-    "params": {"count": 1, "interrupt": false, "alert_text": "Rose = zombie!"},
-    "triggered_by": {"type": "gift", "user": "viewer", "gift_name": "Rose"},
-    "rule_name": "Rose → Spawn zombie",
-    "ts": 1794422400.0
-  }
-}
-```
-
-Events are broadcast as `{ "kind": "event", "data": { ...TikTokEvent } }`.
-
-## 2. HTTP event webhook
-
-Send a TikTok event to the server. It is matched against the active preset and any actions are forwarded to the game clients.
+## HTTP event webhook
 
 ```bash
 curl -X POST http://localhost:8000/api/bridge/event \
@@ -31,22 +14,10 @@ curl -X POST http://localhost:8000/api/bridge/event \
   -d '{"type":"gift","user":"viewer_123","nickname":"Viewer","gift_name":"Rose","diamonds":1,"source":"webhook"}'
 ```
 
-Supported event `type`: `gift`, `like`, `follow`, `comment`, `join`, `share`, `subscribe`. TikTok gift cost is paid by viewers in Coins; the separate `diamonds` event field is kept for the creator-side LIVE gift value and is not shown as the viewer's purchase price. Use the gift catalog's `coins` value for price sorting.
+Supported normalized event types include `gift`, `like`, `follow`, `comment`, `join`, `share`, and `subscribe`. If `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` is set, send it in the `X-GiftStream-Secret` header. Comments are treated as data; they are never executed as Minecraft console commands.
 
-For a protected webhook, set `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` in `.env` and send it in the `X-GiftStream-Secret` header.
+TikTok viewer purchase price is expressed in Coins. The separate `diamonds` field is creator-side gift value and is not used as a substitute for the viewer's coin price.
 
-## 3. UDP (localhost only)
+## Local output formats
 
-Every triggered action is also sent as one UTF-8 JSON datagram to `127.0.0.1:47821`. Your local game/mod can bind that port and parse each datagram. Example payload is the same as the `data` in a WebSocket action frame. GiftStream sends to local loopback so no gameplay command port is exposed to the public network.
-
-## 4. JSONL file
-
-Every action is appended to `events.jsonl` in the project root. Each line is an independent UTF-8 JSON action. A game process may tail this file. Rotate or truncate it between long streams if desired.
-
-## Action names
-
-Built-in action identifiers include `spawn_zombie`, `spawn_enemy`, `spawn_boss`, `boss_raid`, `heal`, `drop_diamond`, `drop_item`, `give_item`, `move_left`, `move_right`, `jump`, `shield`, `speed_boost`, `teleport`, `spawn_wall`, `change_weather`, `change_time`, `screen_shake`, `confetti`, `vote` and `custom`. `params` is an open JSON object: the game adapter decides what fields to honor.
-
-## Minecraft / game-server adapter
-
-For Minecraft, a small local plugin/companion service should receive UDP or HTTP and execute only an allow-listed set of server commands. Do not expose RCON credentials or arbitrary command execution to TikTok events. The first version deliberately provides a generic adapter; a dedicated Minecraft plugin can map actions such as `spawn_zombie` or `give_item` to safe, configured server commands.
+Triggered actions are also sent as UTF-8 JSON datagrams to `127.0.0.1:47821` and appended to GiftStream's local JSONL event file. Bind any listener to loopback. The Minecraft Parkour flow uses its restricted local RCON controller instead; do not expose RCON to a public network.

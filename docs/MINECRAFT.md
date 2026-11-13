@@ -1,46 +1,38 @@
-# Minecraft przez ServerTap (pierwszy adapter)
+# Minecraft Parkour 100 Levels
 
-GiftStream ma wstępne, działające połączenie z serwerami **Paper / Spigot / Bukkit** przez wtyczkę [ServerTap](https://github.com/servertap-io/servertap). Instalacja wtyczki i konfiguracja serwera odbywa się po stronie właściciela serwera.
+GiftStream's only built-in game flow is a local Minecraft Parkour server using the bundled `100-levels-5229-v1.7.4.zip` world.
 
-## Konfiguracja
+## One-click setup
 
-1. Zainstaluj ServerTap na serwerze Minecraft i uruchom go ponownie.
-2. Włącz uwierzytelnianie kluczem w `plugins/ServerTap/config.yml`:
+In **Minecraft Parkour**, enter your Minecraft nickname, read and accept the Minecraft EULA, then choose **Utwórz i uruchom serwer**. GiftStream uses its default data folder and refuses to overwrite an unrelated non-empty folder. On first setup it:
 
-   ```yaml
-   useKeyAuth: true
-   key: "długi-losowy-klucz"
-   ```
+- downloads the official Minecraft 26.2 server JAR using Mojang's version manifest and checks the published SHA-1;
+- verifies that the installed Java version meets the requirement in the same manifest;
+- extracts the included 100 Levels world, which has map datapack regions for levels 1–100;
+- configures and starts the vanilla server bound only to `127.0.0.1:25565`;
+- creates a random RCON password and binds RCON only to `127.0.0.1`.
 
-3. Udostępnij API serwera **tylko GiftStream**. Zalecany jest HTTPS albo tunel/VPN; nie otwieraj publicznie portu ServerTap bez ochrony.
-4. W GiftStream otwórz **Integracje → Minecraft przez ServerTap**, wpisz adres API, klucz i nick gracza. Zapisz i użyj **Testuj połączenie**.
-5. W widoku **Gry** wybierz „Minecraft: przetrwanie” i utwórz gotowy preset. Każda akcja pasująca do obsługiwanej mapy zostanie też wysłana na serwer, gdy integracja jest włączona.
+The map works as a datapack and does not require a third-party plugin. The official Minecraft server is downloaded at setup time and is not bundled with GiftStream. Internet access and compatible Java are needed during setup. The server uses up to 2 GB of memory and the Minecraft EULA must be accepted by the user.
 
-Domyślny adres ServerTap to często `http://127.0.0.1:4567`, ale port zależy od konfiguracji Twojego serwera.
+When the server is ready, enable **Wysyłaj akcje presetu parkour do lokalnej gry** to allow gifts to trigger game actions. Use **Zatrzymaj** for a graceful shutdown. The log is `giftstream-server.log` in the server folder.
 
-## Mapowane akcje
+## Preset and coin prices
 
-- `spawn_zombie`, `spawn_enemy` — zombie, szkielet, creeper, pająk, slime lub wiedźma; maksymalnie 5 stworzeń na wyzwolenie.
-- `spawn_boss`, `boss_raid` — Wither, Smok Endu, Warden lub Ravager. Używaj ostrożnie.
-- `heal`, `shield`, `speed_boost` — dozwolone efekty dla skonfigurowanego gracza, z limitami czasu.
-- `drop_diamond`, `drop_item`, `give_item` — tylko przedmioty z krótkiej allow-listy i maksymalnie 64 sztuki.
-- `change_time`, `change_weather`, `confetti` — kilka efektów serwerowych.
+The sole built-in preset maps:
 
-Pozostałe akcje nadal są widoczne w dashboardzie i działają w grze demo, ale ten adapter je pomija. Komenda jest budowana z allow-listy GiftStream. Treść komentarzy, nazwy prezentów ani parametry przychodzące z webhooka nigdy nie są doklejane do komendy konsoli.
+- Rose (1–29 Coins) to a small push;
+- Donut (30–999 Coins) to the next level;
+- Ice Cream (30–999 Coins) to the previous level;
+- Castle (at least 1,000 Coins) to a 60-second reset countdown;
+- Lion (at least 1,000 Coins) to cancel the countdown;
+- Follow to a 20-second jail.
 
-## Lokalny serwer Parkour 100 Levels
+Rules can be edited in GiftStream. Coin thresholds use only an explicit coin price from TikTok's gift catalog. If a catalog entry exposes only `diamond_count` or has no verified coin price, the coin-based rule will not fire for that gift. TikTok gift catalog data and prices can vary by region.
 
-Panel **Integracje → Minecraft · Parkour 100 Levels** ma przycisk **Utwórz i uruchom serwer**. Po wpisaniu nicku i samodzielnym zaakceptowaniu Minecraft EULA GiftStream:
+## Optional TikTok chat relay
 
-- rozpakowuje do nowego, pustego folderu dołączoną mapę `100-levels-5229-v1.7.4.zip` (metadane świata: Minecraft 26.2; datapack ma regiony dla poziomów 1–100);
-- pobiera serwer Minecraft 26.2 z oficjalnego manifestu Mojang i weryfikuje SHA-1 podany w manifeście;
-- sprawdza wymagany major Java na podstawie manifestu i uruchamia serwer z ograniczeniem do `127.0.0.1:25565`;
-- ustawia losowe hasło RCON, które nasłuchuje wyłącznie na localhost; sekrety RCON nie są ujawniane przez API.
+The option **Przekazuj komentarze TikTok LIVE do czatu Minecraft bez zmian** is off by default. When enabled, GiftStream passes the comment text as a JSON-escaped `tellraw` component. It does not prefix a username, trim or otherwise rewrite the message, and never interprets the message as a Minecraft command. The relay is best-effort: it only handles comments actually received by the unofficial TikTokLive connector, and messages over 2,000 characters are rejected rather than truncated.
 
-Wymaga zainstalowanej zgodnej wersji Java oraz połączenia z Internetem podczas pierwszej konfiguracji. Minecraft server binary podlega osobnej licencji Mojang/Microsoft; GiftStream nie zawiera serwera. Nie wybieraj folderu z istniejącymi danymi — konfiguracja odmówi nadpisania niepustego folderu. Zapisz dostęp do serwera jako `localhost:25565`. Włącz następnie pole „Wysyłaj akcje presetu parkour”.
+## Network safety
 
-Preset parkour ustawia progi ceny prezentu w monetach: push jest najtańszy (1–29), przejście do przodu i cofnięcie poziomu wymagają 30–999 monet, a reset i anty-reset — co najmniej 1000 monet. Prezenty domyślne to odpowiednio Rose, Donut, Ice Cream, Castle i Lion; więzienie trwa 20 sekund i domyślnie uruchamia je follow. Reguły i progi można edytować.
-
-Ceny do progów brane są wyłącznie z jawnego coin_count/coinCount/coins w katalogu prezentów. Jeśli katalog ma tylko diamond_count albo nie zna ceny, GiftStream nie uznaje tego za cenę monet i dana reguła cenowa się nie uruchomi. Odśwież katalog TikToka, który może różnić się regionalnie. Dostępne akcje obejmują też kolejny/poprzedni obszar poziomu (wyznaczany z datapacka mapy), więzienie, reset z 60-sekundowym odliczaniem i anty-reset anulujący licznik. Parkour steruje lokalnym serwerem przez ograniczone komendy RCON; ServerTap nie jest wymagany dla tego trybu. Serwer może potrzebować chwili na pierwszy start; log znajduje się w `giftstream-server.log` w folderze serwera. Zatrzymuj serwer przyciskiem **Zatrzymaj**.
-
-To lokalny tryb dla komputera streamera. `127.0.0.1` nie jest adresem widzów ani serwera uruchomionego na innym hoście; nie przekierowuj portu RCON ani nie udostępniaj go publicznie.
+This is a local streamer-PC feature. `127.0.0.1` is not reachable by viewers or another host. Do not forward or publicly expose Minecraft RCON or the server port. Third-party plugins are not required for this Parkour flow.

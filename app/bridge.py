@@ -1,12 +1,8 @@
-"""GiftStream — bridge do gier (uniwersalny).
+"""GiftStream event bridge for the supported Minecraft Parkour mode and local tools.
 
-Gra łączy się na 4 sposoby (wybierz co pasuje do Twojej gry):
-  1. WebSocket  /ws/game      — demo gra webowa (game.html)
-  2. HTTP webhook POST /api/bridge/event — dowolna gra / skrypt
-  3. UDP 127.0.0.1:47821      — gry desktopowe / Unity / Godot / Unreal
-  4. Plik events.jsonl        — najprostszy bridge (gra czyta plik)
-
-Dashboard i overlay łączą się przez /ws/feed.
+Generic normalized events are also broadcast over WebSocket, UDP and JSONL for
+local diagnostics/custom tools; they are not additional bundled game support.
+Dashboard and overlays connect through /ws/feed.
 """
 from __future__ import annotations
 
@@ -91,6 +87,26 @@ class Hub:
     async def publish_status(self, status: dict) -> None:
         await self._broadcast(self.feed_clients, {"kind": "status", "data": status})
         await self._broadcast(self.game_clients, {"kind": "status", "data": status})
+
+    def clear_activity(self) -> None:
+        self.recent_events.clear()
+        self.recent_actions.clear()
+        try:
+            EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            EVENTS_FILE.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+
+    def reset_stats(self) -> None:
+        self.clear_activity()
+        self.donors.clear()
+        self.total_diamonds = 0
+        self.total_gifts = 0
+        self.viewer_count = 0
+        self.total_likes = 0
+
+    async def broadcast_snapshot(self) -> None:
+        await self._broadcast(self.feed_clients, {"kind": "snapshot", "data": self.snapshot()})
 
     def snapshot(self) -> dict:
         top = sorted(self.donors.values(), key=lambda d: d["diamonds"], reverse=True)[:10]

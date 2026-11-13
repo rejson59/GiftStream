@@ -101,10 +101,6 @@ class AppConfig(BaseModel):
     tiktok_username: str = ""
     mode: Literal["tiktok", "simulator", "managed"] = "simulator"
     active_preset_id: str = "default"
-    minecraft_servertap_url: str = ""
-    minecraft_player: str = ""
-    minecraft_api_key: str = ""
-    minecraft_enabled: bool = False
     tts_enabled: bool = False
     tts_voice: str = "pl-PL"
     sound_alerts: bool = False
@@ -123,27 +119,23 @@ class AppConfig(BaseModel):
 GIFT_CATALOG: list[dict[str, Any]] = [
     # Monety to cena orientacyjna dla widza; diamenty to odrębna wartość zdarzenia.
     # Ceny mogą się różnić regionalnie; prawdziwe ID i grafiki uzupełnia katalog TikToka.
-    {"name": "Rose", "label_pl": "Róża", "id": None, "diamonds": 1, "coins": 1, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "TikTok", "label_pl": "TikTok", "id": None, "diamonds": 5, "coins": 5, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Finger Heart", "label_pl": "Serduszko z palców", "id": None, "diamonds": 5, "coins": 5, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Doughnut", "label_pl": "Donut", "id": None, "diamonds": 30, "coins": 30, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Ice Cream", "label_pl": "Lody", "id": None, "diamonds": 50, "coins": 50, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Panda", "label_pl": "Panda", "id": None, "diamonds": 100, "coins": 100, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Sunglasses", "label_pl": "Okulary", "id": None, "diamonds": 199, "coins": 199, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Corgi", "label_pl": "Corgi", "id": None, "diamonds": 299, "coins": 299, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Money Gun", "label_pl": "Pistolet na pieniądze", "id": None, "diamonds": 599, "coins": 599, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Dragon", "label_pl": "Smok", "id": None, "diamonds": 999, "coins": 999, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Castle", "label_pl": "Zamek", "id": None, "diamonds": 2888, "coins": 2888, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Lion", "label_pl": "Lew", "id": None, "diamonds": 29999, "coins": 29999, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "TikTok Universe", "label_pl": "Wszechświat TikToka", "id": None, "diamonds": 34999, "coins": 34999, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Rose", "label_pl": "Róża", "id": None, "diamonds": 1, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "TikTok", "label_pl": "TikTok", "id": None, "diamonds": 5, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Finger Heart", "label_pl": "Serduszko z palców", "id": None, "diamonds": 5, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Doughnut", "label_pl": "Donut", "id": None, "diamonds": 30, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Ice Cream", "label_pl": "Lody", "id": None, "diamonds": 50, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Panda", "label_pl": "Panda", "id": None, "diamonds": 100, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Sunglasses", "label_pl": "Okulary", "id": None, "diamonds": 199, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Corgi", "label_pl": "Corgi", "id": None, "diamonds": 299, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Money Gun", "label_pl": "Pistolet na pieniądze", "id": None, "diamonds": 599, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Dragon", "label_pl": "Smok", "id": None, "diamonds": 999, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Castle", "label_pl": "Zamek", "id": None, "diamonds": 2888, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Lion", "label_pl": "Lew", "id": None, "diamonds": 29999, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "TikTok Universe", "label_pl": "Wszechświat TikToka", "id": None, "diamonds": 34999, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
 ]
 
 # Akcje gier — dokumentacja w docs/BRIDGE.md
 KNOWN_ACTIONS: list[str] = [
-    "spawn_zombie", "spawn_enemy", "spawn_boss", "boss_raid",
-    "heal", "drop_diamond", "drop_item", "give_item",
-    "move_left", "move_right", "jump", "shield", "speed_boost",
-    "teleport", "spawn_wall", "change_weather", "change_time",
-    "parkour_push", "parkour_level_forward", "parkour_level_back", "parkour_jail", "parkour_reset", "parkour_antireset",
-    "screen_shake", "confetti", "vote", "custom",
+    "parkour_push", "parkour_level_forward", "parkour_level_back",
+    "parkour_jail", "parkour_reset", "parkour_antireset",
 ]

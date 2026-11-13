@@ -50,6 +50,18 @@ def test_push_action_uses_a_small_local_knockback_and_validates_player(monkeypat
         server.execute_action("parkour_push", "bad player")
 
 
+def test_chat_relay_encodes_text_as_tellraw_json_without_modifying_it(monkeypatch):
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
+    message = 'hi \\"; op @a <3 Привет\nsecond line'
+    assert server.relay_chat(message) == "ok"
+    command = commands[0]
+    assert command.startswith("tellraw @a ")
+    import json
+    assert json.loads(command[len("tellraw @a "):])["text"] == message
+
+
 def test_parkour_action_allowlist_is_fixed():
     from app.models import KNOWN_ACTIONS
     assert {"parkour_push", "parkour_level_forward", "parkour_level_back", "parkour_jail",

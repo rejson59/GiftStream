@@ -152,6 +152,13 @@ class GiftStreamDesktop:
             text_select=True,
         )
         self.window.events.closed += self.stop
+        # Shortcut creation invokes PowerShell/COM on Windows; never make the UI wait on it.
+        threading.Thread(
+            target=create_start_menu_shortcut,
+            args=(Path(sys.executable).resolve(),),
+            name="GiftStream shortcut",
+            daemon=True,
+        ).start()
         self.update_thread.start()
         try:
             # Windows uses the native Edge WebView2 control; no external browser tab is opened.
@@ -188,7 +195,6 @@ def _start_installed_version_if_needed() -> bool:
     if cached and cached_version > running_version:
         # A previously downloaded update is already verified; prefer it without waiting on internet.
         latest_executable = cached[1].resolve()
-        create_start_menu_shortcut(latest_executable)
         if latest_executable != running_executable:
             flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
             try:
@@ -198,13 +204,8 @@ def _start_installed_version_if_needed() -> bool:
                 return False
         return False
 
-    # Keep launch fast: do not duplicate a large one-file executable before rendering the UI.
-    # The initial binary runs directly; checksum-verified updates are cached in the background.
-    shortcut_target = cached[1].resolve() if cached and cached_version == running_version else running_executable
-    try:
-        create_start_menu_shortcut(shortcut_target)
-    except OSError:
-        pass
+    # Keep launch fast: no synchronous PowerShell, network check, or executable copy here.
+    # The native window is shown first; shortcut creation runs asynchronously from run().
     return False
 
 

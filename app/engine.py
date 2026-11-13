@@ -24,6 +24,11 @@ class Engine:
         self._like_accum: dict[str, int] = {}    # rule_id -> nagromadzone lajki
         self.stats = {"events": 0, "actions": 0, "cooldown_skips": 0}
 
+    def reset_stats(self) -> None:
+        self.stats = {"events": 0, "actions": 0, "cooldown_skips": 0}
+        self._cooldowns.clear()
+        self._like_accum.clear()
+
     # -- preset ------------------------------------------------------------
     def load_preset(self, preset_id: str) -> Preset | None:
         self.active_preset = store.get_preset(preset_id)
