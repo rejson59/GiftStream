@@ -12,7 +12,7 @@ In **Minecraft Parkour**, select **Najnowsza stabilna** or one of the recent off
 - configures and starts the vanilla server bound only to `127.0.0.1:25565`;
 - creates a random RCON password and binds RCON only to `127.0.0.1`.
 
-The map works as a datapack and does not require a third-party plugin. The official Minecraft server is downloaded at setup time and is not bundled with GiftStream. Internet access and compatible Java are needed during setup. The server uses up to 2 GB of memory and the Minecraft EULA must be accepted by the user.
+The map works as a datapack and does not require mods, a mod loader, or third-party plugins. The official Minecraft server is downloaded at setup time and is not bundled with GiftStream. GiftStream searches PATH, `JAVA_HOME`, common launcher runtimes (including `.minecraft/runtime`, Horizon, Prism and MultiMC) and running Java game processes. If no compatible runtime is found on Windows, it installs a per-user Adoptium JRE into GiftStream's data folder, verifies its SHA-256, and uses it without requiring administrator rights. Internet access is needed for first setup and the Minecraft EULA must be accepted by the user. The server uses up to 2 GB of memory.
 
 When the server is ready, join from Minecraft Multiplayer using **`localhost:25565`** (or use **Kopiuj adres** in GiftStream). This server is intentionally reachable only from the same computer. The dashboard shows the selected Minecraft version and connected player count when RCON is ready. Enable **Wysyłaj akcje presetu parkour do lokalnej gry** to allow gifts to trigger game actions. Use **Zatrzymaj** for a graceful shutdown. The log is `giftstream-server.log` in that version's server folder.
 

@@ -92,3 +92,4 @@ body{background:radial-gradient(ellipse at 84% 0%,#17524a32,transparent 29%),rad
 .parkour-form select{min-height:38px;width:100%;padding:8px 10px;border:1px solid #ffffff19;border-radius:9px;background:#0c1519;color:#edf4ef;font:11px var(--mono)}
 .mc-join-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:13px;padding:12px 14px;border:1px solid #5ee1bd25;border-radius:10px;background:#0c1519}.mc-join-bar>div{display:grid;gap:5px}.mc-join-label{color:#87a39a;font-size:8px;letter-spacing:.12em}.mc-join-bar code{color:#d9ff9c;font:700 15px var(--mono)}.mc-player-count{color:#93a59e;font-size:9px}.mc-join-bar button{flex:0 0 auto}
 @media(max-width:520px){.mc-join-bar{align-items:flex-start;flex-direction:column}.mc-join-bar button{width:100%}}
+.mc-player-count.mc-warning{color:#ffca86}

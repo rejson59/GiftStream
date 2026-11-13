@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -11,6 +13,7 @@ import socket
 import struct
 import subprocess
 import time
+import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
@@ -28,6 +31,14 @@ MAX_SERVER_JAR_BYTES = 300 * 1024 * 1024
 _VERSION_CACHE: tuple[float, dict[str, Any]] | None = None
 _VERSION_CACHE_TTL = 600
 _VERSION_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
+_WINDOWS_PROCESS_CACHE: tuple[float, list[dict[str, Any]]] = (0.0, [])
+
+
+def _write_parkour_settings(state: dict[str, Any]) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SETTINGS_PATH.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, SETTINGS_PATH)
 
 
 def _map_archive() -> Path:
@@ -52,6 +63,237 @@ def map_level_areas(archive: Path | None = None) -> dict[int, tuple[int, int, in
         raise ValueError("Nie udało się odczytać zakresów poziomów z mapy parkour.")
     return result
 
+
+
+def _windows_java_processes() -> list[dict[str, Any]]:
+    """Inspect running Java processes without terminating or modifying them."""
+    global _WINDOWS_PROCESS_CACHE
+    if os.name != "nt":
+        return []
+    if _WINDOWS_PROCESS_CACHE[0] > time.monotonic():
+        return [dict(item) for item in _WINDOWS_PROCESS_CACHE[1]]
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        return []
+    script = (
+        "$items = @(Get-CimInstance Win32_Process -Filter \"Name='java.exe' OR Name='javaw.exe'\" "
+        "| ForEach-Object { [pscustomobject]@{ name=$_.Name; path=$_.ExecutablePath; "
+        "command=$_.CommandLine; pid=$_.ProcessId } }); "
+        "ConvertTo-Json -InputObject $items -Compress"
+    )
+    try:
+        result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+                                capture_output=True, text=True, timeout=3, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        value = json.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else []
+        processes = value if isinstance(value, list) else [value] if isinstance(value, dict) else []
+    except (OSError, subprocess.SubprocessError, ValueError):
+        processes = []
+    _WINDOWS_PROCESS_CACHE = (time.monotonic() + 3, processes)
+    return [dict(item) for item in processes]
+
+
+def _launcher_label(path: str) -> str:
+    value = path.casefold()
+    for key, label in (("horizon", "Horizon Launcher"), ("prism", "Prism Launcher"),
+                       ("multimc", "MultiMC"), ("lunar", "Lunar Client"),
+                       ("feather", "Feather Launcher"), ("minecraft", "Minecraft Launcher")):
+        if key in value:
+            return label
+    return "Launcher Minecraft Java"
+
+
+def _running_minecraft_clients() -> list[dict[str, Any]]:
+    results = []
+    markers = ("net.minecraft.client.main.main", "net.minecraft.launchwrapper.launch",
+               "net.fabricmc.loader.impl.launch.knot.knotclient", "cpw.mods.modlauncher.launcher",
+               "--gamedir", "--assetsdir")
+    for proc in _windows_java_processes():
+        command = str(proc.get("command") or "")
+        path = str(proc.get("path") or "")
+        if not any(marker in command.casefold() for marker in markers):
+            continue
+        version_match = re.search(r"(?:--version[ =]|-version[ =])([0-9][0-9A-Za-z.+_-]*)", command)
+        results.append({"launcher": _launcher_label(path + " " + command),
+                        "version": version_match.group(1) if version_match else None,
+                        "pid": int(proc.get("pid") or 0)})
+    return results
+
+
+def _java_candidates() -> list[Path]:
+    candidates: list[Path] = []
+
+    def add(value: str | Path | None) -> None:
+        if not value:
+            return
+        path = Path(value).expanduser()
+        if path.name.casefold() == "javaw.exe":
+            path = path.with_name("java.exe")
+        if path.is_dir():
+            path = path / ("bin/java.exe" if os.name == "nt" else "bin/java")
+        if path.is_file() and path not in candidates:
+            candidates.append(path)
+
+    add(shutil.which("java"))
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        add(Path(java_home) / "bin" / ("java.exe" if os.name == "nt" else "java"))
+    for proc in _windows_java_processes():
+        add(proc.get("path"))
+
+    if os.name == "nt":
+        appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
+        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+        program_files = [Path(os.environ.get(name, "")) for name in ("ProgramFiles", "ProgramW6432") if os.environ.get(name)]
+        roots = [appdata / ".minecraft" / "runtime", appdata / "Horizon", appdata / "HorizonLauncher",
+                 appdata / "PrismLauncher", appdata / "MultiMC", local / "Horizon", local / "HorizonLauncher",
+                 local / "PrismLauncher", local / "Programs" / "Horizon Launcher"]
+        roots.extend(root / sub for root in program_files for sub in ("Eclipse Adoptium", "Java", "Microsoft"))
+        for root in roots:
+            if not root.is_dir():
+                continue
+            try:
+                for path in root.rglob("java.exe"):
+                    add(path)
+                    if len(candidates) >= 100:
+                        return candidates
+                for path in root.rglob("javaw.exe"):
+                    add(path)
+                    if len(candidates) >= 100:
+                        return candidates
+            except OSError:
+                continue
+    return candidates
+
+
+def _java_major(executable: Path) -> int | None:
+    try:
+        result = subprocess.run([str(executable), "-version"], capture_output=True,
+                                text=True, timeout=6, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        output = (result.stderr or "") + (result.stdout or "")
+        match = re.search(r'version\s+"(?:1\.)?(\d+)', output)
+        return int(match.group(1)) if match else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def find_java(required_major: int) -> tuple[Path, int] | None:
+    suitable = []
+    for executable in _java_candidates():
+        major = _java_major(executable)
+        if major is not None and major >= required_major:
+            suitable.append((major, executable))
+    if not suitable:
+        return None
+    major, executable = max(suitable, key=lambda item: item[0])
+    return executable, major
+
+
+def _safe_extract_java(payload: bytes, destination: Path) -> Path:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        infos = [item for item in archive.infolist() if not item.is_dir()]
+        if len(infos) > 30000 or sum(item.file_size for item in infos) > 800 * 1024 * 1024:
+            raise RuntimeError("Archiwum Java przekracza dozwolony rozmiar.")
+        root = destination.resolve()
+        for item in infos:
+            member = PurePosixPath(item.filename.replace("\\", "/"))
+            if member.is_absolute() or ".." in member.parts or not member.parts:
+                raise RuntimeError("Archiwum Java zawiera niebezpieczną ścieżkę.")
+            if (item.external_attr >> 16) & 0o170000 == 0o120000:
+                raise RuntimeError("Archiwum Java zawiera niedozwolony link symboliczny.")
+            target = (destination / Path(*member.parts)).resolve()
+            if root != target and root not in target.parents:
+                raise RuntimeError("Archiwum Java wychodzi poza katalog instalacji.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(item) as source, target.open("wb") as output:
+                shutil.copyfileobj(source, output)
+        java_files = list(destination.rglob("java.exe"))
+        if not java_files:
+            raise RuntimeError("Pobrany pakiet Java nie zawiera java.exe.")
+        return java_files[0]
+
+
+def _install_java(required_major: int) -> Path:
+    """Install an official Adoptium JRE per-user, with no admin rights required."""
+    if os.name != "nt":
+        raise RuntimeError(f"Wymagana jest Java {required_major}+. Zainstaluj ją i uruchom GiftStream ponownie.")
+    architecture = platform.machine().casefold()
+    arch = "aarch64" if architecture in {"arm64", "aarch64"} else "x64"
+    repository = f"adoptium/temurin{required_major}-binaries"
+    api_url = f"https://api.github.com/repos/{repository}/releases/latest"
+    request = urllib.request.Request(api_url, headers={"User-Agent": "GiftStream/1", "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            release_data = response.read(12 * 1024 * 1024 + 1)
+    except Exception as exc:
+        raise RuntimeError(f"Nie udało się pobrać instalatora Java {required_major} z Adoptium: {exc}") from exc
+    if len(release_data) > 12 * 1024 * 1024:
+        raise RuntimeError("Odpowiedź katalogu Java przekracza dozwolony rozmiar.")
+    release = json.loads(release_data.decode("utf-8"))
+    assets = release.get("assets", [])
+    wanted = re.compile(rf"^OpenJDK{required_major}U-(?:jre|jdk)_{arch}_windows_hotspot_.*\.zip$", re.IGNORECASE)
+    asset = next((item for item in assets if wanted.fullmatch(str(item.get("name", "")))
+                  and "jre_" in str(item.get("name", "")).casefold()), None)
+    if not asset:
+        asset = next((item for item in assets if wanted.fullmatch(str(item.get("name", "")))), None)
+    if not asset:
+        raise RuntimeError(f"Nie znaleziono oficjalnego pakietu Java {required_major} dla Windows/{arch}.")
+    url = str(asset.get("browser_download_url", ""))
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "github.com" or not parsed.path.startswith(f"/{repository}/releases/download/"):
+        raise RuntimeError("Adoptium zwrócił nieprawidłowy adres instalatora Java.")
+    request = urllib.request.Request(url, headers={"User-Agent": "GiftStream/1"})
+    with urllib.request.urlopen(request, timeout=90) as response:
+        payload = response.read(400 * 1024 * 1024 + 1)
+    if len(payload) > 400 * 1024 * 1024:
+        raise RuntimeError("Instalator Java przekracza dozwolony rozmiar.")
+    expected_digest = str(asset.get("digest", ""))
+    if expected_digest.startswith("sha256:"):
+        expected_digest = expected_digest.split(":", 1)[1]
+    if not expected_digest:
+        checksum_asset = next((item for item in assets if str(item.get("name", "")) in
+                               {str(asset.get("name", "")) + ".sha256.txt", str(asset.get("name", "")) + ".sha256"}), None)
+        if checksum_asset:
+            checksum_url = str(checksum_asset.get("browser_download_url", ""))
+            checksum_parsed = urllib.parse.urlparse(checksum_url)
+            if checksum_parsed.scheme == "https" and checksum_parsed.hostname == "github.com" and checksum_parsed.path.startswith(f"/{repository}/releases/download/"):
+                checksum_request = urllib.request.Request(checksum_url, headers={"User-Agent": "GiftStream/1"})
+                with urllib.request.urlopen(checksum_request, timeout=20) as response:
+                    checksum_text = response.read(4096).decode("ascii", errors="replace")
+                match = re.search(r"\b([a-fA-F0-9]{64})\b", checksum_text)
+                expected_digest = match.group(1) if match else ""
+    if not re.fullmatch(r"[a-fA-F0-9]{64}", expected_digest):
+        raise RuntimeError("Brak poprawnej sumy SHA-256 dla instalatora Java.")
+    if hashlib.sha256(payload).hexdigest().casefold() != expected_digest.casefold():
+        raise RuntimeError("Suma SHA-256 pakietu Java jest nieprawidłowa.")
+
+    install_root = data_dir() / "runtime" / f"temurin-{required_major}"
+    install_root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="java-install-", dir=install_root.parent) as temporary:
+        staging = Path(temporary) / "extract"
+        staging.mkdir()
+        extracted_java = _safe_extract_java(payload, staging)
+        java_home = extracted_java.parent.parent
+        if install_root.exists():
+            shutil.rmtree(install_root)
+        shutil.copytree(java_home, install_root)
+    executable = install_root / "bin" / "java.exe"
+    if not executable.is_file() or (_java_major(executable) or 0) < required_major:
+        shutil.rmtree(install_root, ignore_errors=True)
+        raise RuntimeError("Automatycznie zainstalowana Java nie spełnia wymagań Minecraft.")
+    return executable
+
+
+def ensure_java(required_major: int) -> tuple[Path, int]:
+    found = find_java(required_major)
+    if found:
+        return found
+    executable = _install_java(required_major)
+    actual_major = _java_major(executable) or 0
+    if actual_major < required_major:
+        raise RuntimeError(f"Zainstalowana Java {actual_major} jest za stara; wymagane Java {required_major}+.")
+    return executable, actual_major
 
 def _version_manifest(force: bool = False) -> dict[str, Any]:
     """Fetch/cache Mojang's authoritative release manifest (stable releases only)."""
@@ -92,7 +334,9 @@ def minecraft_versions() -> dict[str, Any]:
 
 
 def _resolve_release(requested_version: str = "latest") -> tuple[str, dict[str, Any]]:
-    manifest = _version_manifest()
+    # Revalidate the moving "latest" alias at setup time; a chosen numbered release
+    # can use the short-lived manifest cache populated by the version selector.
+    manifest = _version_manifest(force=requested_version == "latest")
     selected = str(manifest.get("latest", {}).get("release", "")) if requested_version == "latest" else requested_version
     if not _VERSION_RE.fullmatch(selected):
         raise ValueError("Wersja Minecraft musi być stabilnym wydaniem, np. 1.21.11.")
@@ -103,27 +347,26 @@ def _resolve_release(requested_version: str = "latest") -> tuple[str, dict[str, 
     return selected, version
 
 
-def _download_server_jar(server_dir: Path, requested_version: str = "latest") -> tuple[Path, int, str]:
-    """Download a selected official release server jar and verify Mojang's SHA-1."""
-    selected, version = _resolve_release(requested_version)
+def _release_details(version: dict[str, Any]) -> dict[str, Any]:
     version_url = str(version.get("url", ""))
     version_host = urllib.parse.urlparse(version_url).hostname or ""
     if not version_url.startswith("https://") or not (version_host == "piston-meta.mojang.com" or version_host.endswith(".piston-meta.mojang.com")):
         raise RuntimeError("Manifest Minecraft zwrócił nieprawidłowy adres wydania.")
     with urllib.request.urlopen(version_url, timeout=15) as response:
-        version_info = json.loads(response.read().decode("utf-8"))
+        info = json.loads(response.read().decode("utf-8"))
+    if not isinstance(info, dict):
+        raise RuntimeError("Mojang zwrócił nieprawidłowe szczegóły wydania Minecraft.")
+    return info
+
+
+def _download_server_jar(server_dir: Path, requested_version: str = "latest") -> tuple[Path, int, str, Path]:
+    """Download a selected official release server jar and verify Mojang's SHA-1."""
+    selected, version = _resolve_release(requested_version)
+    version_info = _release_details(version)
     required_java = int(version_info.get("javaVersion", {}).get("majorVersion", 0))
     if required_java < 1:
         raise RuntimeError(f"Nie udało się odczytać wymagań Java dla Minecraft {selected}.")
-    java_output = subprocess.run([shutil.which("java") or "java", "-version"], capture_output=True,
-                                 text=True, timeout=5, check=False)
-    java_text = (java_output.stderr or "") + (java_output.stdout or "")
-    java_match = re.search(r'version\s+"(?:1\.)?(\d+)', java_text)
-    if not java_match:
-        raise RuntimeError("Nie udało się rozpoznać zainstalowanej wersji Java.")
-    installed_java = int(java_match.group(1))
-    if installed_java < required_java:
-        raise RuntimeError(f"Minecraft {selected} wymaga Java {required_java} lub nowszej; wykryto Java {installed_java}.")
+    java_executable, _installed_java = ensure_java(required_java)
     server = version_info.get("downloads", {}).get("server", {})
     url = str(server.get("url", ""))
     host = urllib.parse.urlparse(url).hostname or ""
@@ -141,7 +384,7 @@ def _download_server_jar(server_dir: Path, requested_version: str = "latest") ->
     temporary = destination.with_suffix(".jar.new")
     temporary.write_bytes(jar)
     os.replace(temporary, destination)
-    return destination, required_java, selected
+    return destination, required_java, selected, java_executable
 
 
 def _extract_map(archive: Path, destination: Path) -> None:
@@ -154,7 +397,7 @@ def _extract_map(archive: Path, destination: Path) -> None:
         if not required.issubset({item.filename for item in infos}):
             raise ValueError("Archiwum nie zawiera poprawnej mapy Minecraft 100 Levels.")
         for item in infos:
-            path = PurePosixPath(item.filename)
+            path = PurePosixPath(item.filename.replace("\\", "/"))
             if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "100 Levels":
                 raise ValueError("Archiwum mapy zawiera niebezpieczną ścieżkę.")
             # Reject Unix symlinks so extraction cannot escape the selected server folder.
@@ -233,8 +476,6 @@ class ParkourServer:
             raise ValueError("Zaznacz akceptację EULA Minecraft przed utworzeniem serwera.")
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Wpisz nick Minecraft: 3–16 liter, cyfr lub podkreśleń.")
-        if not shutil.which("java"):
-            raise RuntimeError("Nie znaleziono Java. Zainstaluj wersję wymaganą przez serwer Minecraft i spróbuj ponownie.")
         selected_version, _version_info = _resolve_release(version)
         if server_dir.strip():
             root = Path(server_dir).expanduser().resolve()
@@ -247,6 +488,13 @@ class ParkourServer:
             if state.get("server_dir") != str(root) or state.get("minecraft_version") != selected_version:
                 raise RuntimeError("Zatrzymaj działający serwer przed przełączeniem wersji Minecraft.")
             return self.status()
+        if state and (state.get("server_dir") != str(root) or state.get("minecraft_version") != selected_version):
+            try:
+                self._rcon("list")
+            except Exception:
+                pass
+            else:
+                raise RuntimeError("Wykryto działający serwer w tle. Zatrzymaj go przed przełączeniem wersji, aby nie utracić kontroli RCON.")
         root.mkdir(parents=True, exist_ok=True)
         if (state.get("server_dir") == str(root) and state.get("minecraft_version") == selected_version
                 and (root / "server.jar").is_file() and (root / "world" / "level.dat").is_file()):
@@ -259,7 +507,7 @@ class ParkourServer:
         map_stage = root / ".giftstream-world-stage"
         try:
             _map_archive()  # Fail before downloading server files if the bundled world is absent.
-            jar, required_java, installed_version = _download_server_jar(root, selected_version)
+            jar, required_java, installed_version, java_executable = _download_server_jar(root, selected_version)
             map_stage.mkdir()
             _extract_map(_map_archive(), map_stage)
             os.replace(map_stage / "100 Levels", root / "world")
@@ -268,11 +516,9 @@ class ParkourServer:
             state = {"server_dir": str(root), "player": player,
                      "rcon_host": "127.0.0.1", "rcon_port": 25575,
                      "server_address": "localhost:25565", "minecraft_version": installed_version,
-                     "map_version": MAP_VERSION, "java_required": required_java, "server_jar": str(jar)}
-            SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            tmp = SETTINGS_PATH.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps({**state, "rcon_password": password}, indent=2), encoding="utf-8")
-            os.replace(tmp, SETTINGS_PATH)
+                     "map_version": MAP_VERSION, "java_required": required_java,
+                     "java_executable": str(java_executable), "server_jar": str(jar)}
+            _write_parkour_settings({**state, "rcon_password": password})
         except Exception:
             shutil.rmtree(map_stage, ignore_errors=True)
             shutil.rmtree(root / "world", ignore_errors=True)
@@ -294,9 +540,33 @@ class ParkourServer:
             raise RuntimeError("Najpierw utwórz lokalny serwer parkour.")
         if self._process is not None and self._process.poll() is None:
             return self.status()
-        java = shutil.which("java")
-        if not java:
-            raise RuntimeError("Nie znaleziono Java wymaganej przez serwer Minecraft.")
+        # The server is deliberately detached from the dashboard process. After a
+        # GiftStream restart, discover an already-running instance through loopback
+        # RCON instead of launching a duplicate on the same port.
+        try:
+            self._rcon("list")
+            return self.status()
+        except Exception:
+            pass
+        try:
+            required_java = int(state.get("java_required") or 0)
+            if required_java < 1:
+                legacy_version = str(state.get("minecraft_version") or state.get("map_version") or MAP_VERSION)
+                _version_id, version_entry = _resolve_release(legacy_version)
+                version_details = _release_details(version_entry)
+                required_java = int(version_details.get("javaVersion", {}).get("majorVersion", 0))
+                if required_java < 1:
+                    raise RuntimeError(f"Nie udało się ustalić wymagań Java dla Minecraft {legacy_version}.")
+                state["java_required"] = required_java
+            configured_java = Path(str(state.get("java_executable", "")))
+            if configured_java.is_file() and (_java_major(configured_java) or 0) >= required_java:
+                java = configured_java
+            else:
+                java, _major = ensure_java(required_java)
+                state["java_executable"] = str(java)
+                _write_parkour_settings(state)
+        except Exception as exc:
+            raise RuntimeError(f"Nie udało się przygotować Java dla serwera Minecraft: {exc}") from exc
         log = (root / "giftstream-server.log").open("ab")
         kwargs: dict[str, Any] = {"cwd": str(root), "stdin": subprocess.DEVNULL,
                                   "stdout": log, "stderr": subprocess.STDOUT, "close_fds": True}
@@ -333,9 +603,12 @@ class ParkourServer:
 
     def status(self) -> dict[str, Any]:
         state = self.settings()
+        clients = _running_minecraft_clients()
+        client_info = {"minecraft_client_running": bool(clients), "minecraft_clients": clients}
         if not state:
             return {"configured": False, "running": False, "ready": False,
                     "server_address": "localhost:25565", "players_online": 0, "players": [],
+                    **client_info,
                     "message": "Utwórz lokalny serwer i zaimportuj mapę 100 Levels."}
         response = {"configured": True, "running": False, "ready": False,
                     "server_address": state.get("server_address", "localhost:25565"),
@@ -344,7 +617,7 @@ class ParkourServer:
                     "map_version": state.get("map_version", MAP_VERSION),
                     "java_required": state.get("java_required"),
                     "chat_relay_enabled": bool(state.get("chat_relay_enabled", False)),
-                    "players_online": 0, "players": [],
+                    "players_online": 0, "players": [], **client_info,
                     "message": "Serwer startuje — pierwsze uruchomienie może potrwać chwilę."}
         if self._process is not None and self._process.poll() is not None:
             response["message"] = f"Serwer zakończył pracę (kod {self._process.returncode}). Zajrzyj do giftstream-server.log."
