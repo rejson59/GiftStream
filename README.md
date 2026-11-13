@@ -4,7 +4,7 @@
 
 ## Co działa w MVP
 
-- Polski panel twórcy z aktywnością na żywo, statystykami i rankingiem wspierających.
+- Polski panel twórcy z aktywnością na żywo, statystykami i rankingiem wspierających; orientacyjne zarobki z giftów w PLN są liczone z diamentów eventu, edytowalnej stawki USD/diament i kursu USD/PLN. Kwota per gift pojawia się w aktywności i katalogu.
 - Presety i edytor reguł: prezent / próg polubień / obserwacja / słowo w komentarzu → akcja gry; gdzie TikTok udostępnia grafikę giftu, pokazujemy oryginalny obraz z jego CDN zamiast emoji.
 - Cooldowny, obsługa serii prezentów i oznaczenia akcji priorytetowych.
 - Symulator zdarzeń oraz nieoficjalny konektor TikTokLive i adapter zewnętrznego WebSocket API.

@@ -68,6 +68,17 @@ def test_gift_endpoint_accepts_supported_sort_orders():
     assert client.get("/api/gifts", params={"sort": "random"}).status_code == 422
 
 
+def test_earnings_rates_are_saved_and_validated(tmp_path, monkeypatch):
+    monkeypatch.setattr(main.earnings_tracker, "SETTINGS_PATH", tmp_path / "earnings.json")
+    client = TestClient(main.app)
+    assert client.get("/api/earnings/settings").json() == {"usd_per_diamond": 0.005, "usd_to_pln": 4.0}
+    saved = client.put("/api/earnings/settings", json={"usd_per_diamond": 0.004, "usd_to_pln": 4.2})
+    assert saved.status_code == 200
+    assert saved.json() == {"usd_per_diamond": 0.004, "usd_to_pln": 4.2}
+    assert client.get("/api/earnings/settings").json() == saved.json()
+    assert client.put("/api/earnings/settings", json={"usd_per_diamond": 0, "usd_to_pln": 4}).status_code == 422
+
+
 def test_live_audio_preferences_are_persisted_without_exposing_secrets(monkeypatch):
     monkeypatch.setattr(main, "config", AppConfig())
     monkeypatch.setattr(main, "save_config", lambda: None)

@@ -20,6 +20,12 @@ Select **Managed API** and configure `TIKTOOL_API_KEY` in `.env`. The adapter us
 
 Po połączeniu TikTokLive prosi o katalog prezentów pokoju LIVE. GiftStream zapisuje lokalnie ID, nazwę, wartość, informację o serii i bezpośredni URL obrazka z metadanych giftu. Biblioteka OBS korzysta z tego oryginalnego obrazka z hostingu TikToka; GiftStream nie kopiuje ani nie hostuje assetów. Jeżeli katalog nie jest dostępny, lista pokazuje przykładowe nazwy i emoji zastępcze. Rzeczywista cena i lista giftów mogą się różnić zależnie od regionu oraz zmian po stronie TikToka.
 
+## Orientacyjny kalkulator zarobku twórcy
+
+Pulpit pokazuje szacunkową wartość pojedynczego giftu, sumę diamentów i estymowany zarobek z bieżącej sesji. Kwota używa **diamentów po stronie twórcy** z eventu (a jeśli ich brakuje — z zapisanego katalogu giftów), liczby powtórzeń zakończonej serii oraz edytowalnych stawek: `diamenty × USD/diament × kurs USD/PLN`. Domyślny punkt startowy to 0,005 USD za diament i kurs 4,00 PLN za USD; obie wartości można zmienić i są zapisywane lokalnie. Nie wyliczamy wypłaty z monet widza ani nie zakładamy, że monety i diamenty mają równą wartość.
+
+To **szacunek**, nie oficjalny kurs ani kwota potwierdzona przez TikToka. [Polityka wirtualnych przedmiotów TikToka](https://support.tiktok.com/legal/virtual-items?lang=en) określa przeliczanie nagród według czynników ustalanych przez TikToka, bez gwarantowanej stałej stawki gotówkowej. Stawka początkowa w GiftStream jest jedynie edytowalnym założeniem; sprawdź własne saldo i podsumowanie LIVE. Szacunek nie odejmuje podatków, opłat wypłaty, prowizji ani innych korekt. Serie są księgowane dopiero przy zdarzeniu kończącym, żeby nie sumować kolejnych aktualizacji tej samej serii.
+
 ## Security notes
 
 - Treat event payloads as untrusted input. GiftStream maps known event types to configured actions; it does not execute arbitrary TikTok comments as shell or game-server commands.

@@ -19,6 +19,7 @@ from pathlib import Path
 from fastapi import WebSocket
 
 from .models import GameAction, TikTokEvent
+from .earnings import resolve_diamonds
 from .paths import data_dir
 
 UDP_HOST, UDP_PORT = "127.0.0.1", 47821
@@ -34,6 +35,8 @@ class Hub:
         self.recent_events: list[dict] = []
         self.recent_actions: list[dict] = []
         self.donors: dict[str, dict] = {}   # user -> {diamonds, gifts, last}
+        self.total_diamonds = 0
+        self.total_gifts = 0
         self.viewer_count = 0
         self.total_likes = 0
 
@@ -50,13 +53,22 @@ class Hub:
     async def publish_event(self, ev: TikTokEvent) -> None:
         data = ev.model_dump()
         data["ts"] = time.time()
+        if ev.type == "gift":
+            diamonds, from_catalog = resolve_diamonds(ev.gift_id, ev.gift_name, ev.diamonds)
+            data["earning_diamonds"] = diamonds
+            data["diamonds_from_catalog"] = from_catalog or ev.diamonds_estimated
+            if ev.repeat_end:
+                count = max(ev.repeat_count, 1)
+                self.total_gifts += count
+                if diamonds > 0:
+                    gift_diamonds = diamonds * count
+                    self.total_diamonds += gift_diamonds
+                    d = self.donors.setdefault(ev.user, {"user": ev.user, "diamonds": 0, "gifts": 0, "last": ""})
+                    d["diamonds"] += gift_diamonds
+                    d["gifts"] += count
+                    d["last"] = ev.gift_name or ""
         self.recent_events.append(data)
         self.recent_events = self.recent_events[-200:]
-        if ev.type == "gift" and ev.diamonds > 0:
-            d = self.donors.setdefault(ev.user, {"user": ev.user, "diamonds": 0, "gifts": 0, "last": ""})
-            d["diamonds"] += ev.diamonds * max(ev.repeat_count, 1)
-            d["gifts"] += 1
-            d["last"] = ev.gift_name or ""
         if ev.type == "like":
             self.total_likes += ev.like_count or 1
         await self._broadcast(self.feed_clients, {"kind": "event", "data": data})
@@ -86,6 +98,8 @@ class Hub:
             "recent_events": self.recent_events[-50:],
             "recent_actions": self.recent_actions[-50:],
             "top_donors": top,
+            "total_diamonds": self.total_diamonds,
+            "total_gifts": self.total_gifts,
             "viewer_count": self.viewer_count,
             "total_likes": self.total_likes,
         }

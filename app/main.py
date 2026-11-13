@@ -16,9 +16,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from . import presets as preset_store
+from . import earnings as earnings_tracker
 from .bridge import Hub
 from .engine import Engine
 from .gifts import list_gifts, record_event, refresh_tiktok_catalog
@@ -62,6 +63,11 @@ class PresetCopyRequest(BaseModel):
     new_name: str
 
 
+class EarningsSettingsRequest(BaseModel):
+    usd_per_diamond: float = Field(gt=0, le=1)
+    usd_to_pln: float = Field(gt=0, le=100)
+
+
 class MinecraftSettingsRequest(BaseModel):
     base_url: str = ""
     api_key: str = ""
@@ -87,6 +93,11 @@ engine = Engine(on_action=publish_game_action)
 async def process_event(ev: TikTokEvent) -> None:
     if ev.viewer_count:
         hub.viewer_count = ev.viewer_count
+    if ev.type == "gift" and ev.diamonds <= 0:
+        resolved, from_catalog = earnings_tracker.resolve_diamonds(ev.gift_id, ev.gift_name, ev.diamonds)
+        if resolved > 0:
+            ev.diamonds = resolved
+            ev.diamonds_estimated = from_catalog
     record_event(ev)
     await hub.publish_event(ev)
     await engine.handle(ev)
@@ -280,6 +291,14 @@ async def gifts(q: str = "", sort: Literal["popular", "price_asc", "price_desc"]
 async def refresh_gifts() -> dict:
     count = await asyncio.to_thread(_refresh_catalog_safely)
     return {"ok": count > 0, "count": count, "gifts": list_gifts()}
+
+@app.get("/api/earnings/settings")
+async def get_earnings_settings() -> dict[str, float]:
+    return earnings_tracker.get_settings()
+
+@app.put("/api/earnings/settings")
+async def update_earnings_settings(req: EarningsSettingsRequest) -> dict[str, float]:
+    return earnings_tracker.save_settings(req.usd_per_diamond, req.usd_to_pln)
 
 @app.get("/api/games")
 async def games() -> list[dict]:

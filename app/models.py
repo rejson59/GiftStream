@@ -70,6 +70,7 @@ class TikTokEvent(BaseModel):
     gift_id: Optional[int] = None
     gift_image_url: Optional[str] = None
     diamonds: int = 0
+    diamonds_estimated: bool = False
     repeat_count: int = 1
     repeat_end: bool = True                  # True = koniec streaka (akcja dopiero wtedy)
     comment: Optional[str] = None
