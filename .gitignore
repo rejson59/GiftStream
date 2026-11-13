@@ -10,6 +10,7 @@ release-assets/
 config.json
 events.jsonl
 gift_catalog.json
+giftstream.log*
 presets/*.json
 !presets/.gitkeep
 .pytest_cache/

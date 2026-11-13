@@ -26,6 +26,17 @@ def test_builtin_parkour_preset_migrates_only_when_untouched(monkeypatch):
     assert saved == []
 
 
+def test_diagnostics_endpoints_return_and_clear_copyable_logs():
+    from app import diagnostics
+
+    diagnostics.info("TikTok connector test diagnostic")
+    client = TestClient(main.app)
+    result = client.get("/api/logs?limit=20")
+    assert result.status_code == 200
+    assert any("TikTok connector test diagnostic" in line for line in result.json()["lines"])
+    assert client.post("/api/logs/clear").json()["ok"] is True
+
+
 def test_minecraft_versions_endpoint_returns_official_release_choices(monkeypatch):
     monkeypatch.setattr(main, "minecraft_versions", lambda: {"latest": "26.3", "versions": [{"id": "26.3"}], "map_version": "26.2"})
     response = TestClient(main.app).get("/api/minecraft/versions")

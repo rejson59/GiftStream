@@ -31,6 +31,7 @@ from .paths import bundle_root, data_dir, installed_release_tag
 from .tiktok_connector import TikTokConnector
 from .version import VERSION
 from . import update_state
+from . import diagnostics
 from .myinstants import search as search_myinstants
 
 load_dotenv()
@@ -294,7 +295,12 @@ async def startup() -> None:
     if _currency_refresh_task is None or _currency_refresh_task.done():
         _currency_refresh_task = asyncio.create_task(_currency_refresh_loop())
     if config.mode == "simulator":
-        await connector.start("simulator")
+        await connector.start("simulator", config.tiktok_username)
+    elif config.mode == "tiktok" and config.tiktok_username:
+        # Restore the last explicitly selected public LIVE channel after an app restart.
+        result = await connector.start("tiktok", config.tiktok_username)
+        if not result.get("ok"):
+            diagnostics.warning("Automatyczne wznowienie TikTok LIVE nie powiodło się: %s", result.get("message", "błąd"))
 
 
 @app.on_event("shutdown")
@@ -629,10 +635,24 @@ async def test_rule(rule_id: str) -> dict:
         raise HTTPException(404, "Nie znaleziono reguły")
     return action.model_dump()
 
+@app.get("/api/logs")
+async def get_diagnostics(limit: int = 300) -> dict[str, Any]:
+    return {"lines": diagnostics.get_logs(limit)}
+
+@app.post("/api/logs/clear")
+async def clear_diagnostics() -> dict[str, bool]:
+    diagnostics.clear_logs()
+    diagnostics.info("Dziennik wyczyszczony z panelu GiftStream.")
+    return {"ok": True}
+
 @app.post("/api/connect")
 async def connect(req: ConnectRequest) -> dict:
     global config
-    result = await connector.start(req.mode, req.username)
+    try:
+        result = await connector.start(req.mode, req.username)
+    except Exception as exc:
+        diagnostics.error("Błąd uruchamiania konektora (%s): %s", req.mode, exc, exc_info=exc)
+        raise HTTPException(500, "Nie udało się uruchomić połączenia. Szczegóły są w panelu logów.") from exc
     if result.get("ok"):
         config.mode = req.mode  # type: ignore[assignment]
         config.tiktok_username = req.username.lstrip("@")
@@ -642,8 +662,13 @@ async def connect(req: ConnectRequest) -> dict:
 
 @app.post("/api/disconnect")
 async def disconnect() -> dict:
+    global config
     await connector.stop()
+    connector.mode = "simulator"
+    config.mode = "simulator"
+    save_config()
     await hub.publish_status(connector.status())
+    diagnostics.info("Połączenie zatrzymano ręcznie; automatyczne wznowienie wyłączono.")
     return {"ok": True, "message": "Rozłączono"}
 
 @app.post("/api/simulate")
