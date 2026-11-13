@@ -37,6 +37,16 @@ def test_catalog_prefers_explicit_coin_cost_when_available(tmp_path, monkeypatch
     assert item["diamonds"] == 6
 
 
+def test_coin_price_lookup_never_claims_estimated_diamond_values_as_purchase_coins(tmp_path, monkeypatch):
+    monkeypatch.setattr(gifts, "CACHE_PATH", tmp_path / "gifts.json")
+    monkeypatch.setattr(gifts, "_seen", {})
+    assert gifts.coin_price_for_gift(None, "Rose") == (1, True)
+    gifts.record_metadata({"id": 813, "name": "Verified Coin Gift", "coin_count": 45,
+                           "diamond_count": 9, "image": {"url_list": []}}, save=False)
+    assert gifts.coin_price_for_gift(813, "Verified Coin Gift") == (45, False)
+    assert gifts.coin_price_for_gift(999999, "Unknown") == (0, True)
+
+
 def test_catalog_rejects_non_tiktok_image_url(tmp_path, monkeypatch):
     monkeypatch.setattr(gifts, "CACHE_PATH", tmp_path / "gifts.json")
     monkeypatch.setattr(gifts, "_seen", {})

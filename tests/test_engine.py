@@ -27,6 +27,30 @@ def test_gift_name_is_case_insensitive_and_other_gift_does_not_match():
     assert ignored == []
 
 
+def test_coin_price_tiers_require_explicit_verified_coin_cost(monkeypatch):
+    engine = Engine()
+    engine.active_preset = Preset(id="test", name="test", rules=[
+        Rule(id="push", trigger={"type": "gift", "min_coins": 1, "max_coins": 29}, action={"type": "parkour_push"}),
+        Rule(id="level", trigger={"type": "gift", "min_coins": 30, "max_coins": 999}, action={"type": "parkour_level_forward"}),
+        Rule(id="reset", trigger={"type": "gift", "min_coins": 1000}, action={"type": "parkour_reset"}),
+    ])
+    monkeypatch.setattr("app.engine.coin_price_for_gift", lambda *_: (0, True))
+    unknown_price = asyncio.run(engine.handle(TikTokEvent(type="gift", gift_name="Rose", diamonds=1)))
+    assert unknown_price == []
+    estimated_price = asyncio.run(engine.handle(TikTokEvent(type="gift", gift_name="Rose", gift_coins=1,
+                                                            gift_coins_estimated=True)))
+    assert estimated_price == []
+    push = asyncio.run(engine.handle(TikTokEvent(type="gift", gift_name="Rose", gift_coins=1,
+                                                  gift_coins_estimated=False)))
+    level = asyncio.run(engine.handle(TikTokEvent(type="gift", gift_name="Donut", gift_coins=30,
+                                                   gift_coins_estimated=False)))
+    reset = asyncio.run(engine.handle(TikTokEvent(type="gift", gift_name="Castle", gift_coins=1000,
+                                                   gift_coins_estimated=False)))
+    assert [action.action for action in push] == ["parkour_push"]
+    assert [action.action for action in level] == ["parkour_level_forward"]
+    assert [action.action for action in reset] == ["parkour_reset"]
+
+
 def test_like_threshold_accumulates_batches():
     engine = Engine()
     engine.active_preset = Preset(id="test", name="test", rules=[

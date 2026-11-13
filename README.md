@@ -8,7 +8,7 @@
 - Presety i edytor reguł: prezent / próg polubień / obserwacja / słowo w komentarzu → akcja gry; gdzie TikTok udostępnia grafikę giftu, pokazujemy oryginalny obraz z jego CDN zamiast emoji.
 - Cooldowny, obsługa serii prezentów i oznaczenia akcji priorytetowych.
 - Symulator zdarzeń oraz nieoficjalny konektor TikTokLive i adapter zewnętrznego WebSocket API.
-- Gra demo „Arena zombie”, pięć gotowych presetów (w tym Minecraft: przetrwanie, parkour, arena i nocna horda) oraz wyszukiwalny katalog dodatkowych koncepcji gier.
+- Gra demo „Arena zombie”, gotowe presety Minecraft (w tym parkour: tani push, zmiany poziomów od 30 monet, reset i anty-reset od 1000) oraz wyszukiwalny katalog dodatkowych koncepcji gier.
 - Alerty prezentów i obserwacji: polska synteza mowy, wbudowany sygnał albo własny bezpośredni publiczny URL HTTPS audio oraz regulacja głośności. Linki MyInstants działają tylko wtedy, gdy użytkownik ma dostęp do bezpośredniego pliku dźwięku; GiftStream nie korzysta z nieudokumentowanego API ani nie przegląda katalogu MyInstants.
 - Edytowalne nakładki browser-source dla OBS i TikTok LIVE Studio: legenda giftów, alerty oraz osobny panel streamera z szacunkowymi zarobkami, ostatnimi giftami i akcjami oraz liczbą widzów.
 - Integracja Minecraft **Paper / Spigot / Bukkit przez ServerTap**. Obsługuje ograniczony zestaw komend z allow-listy; konfiguracja w panelu Integracje.

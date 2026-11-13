@@ -24,6 +24,8 @@ class Trigger(BaseModel):
     gift_name: Optional[str] = None          # np. "Rose", "Lion"
     gift_id: Optional[int] = None            # id prezentu z TikToka
     min_diamonds: Optional[int] = None       # próg wartości prezentu
+    min_coins: Optional[int] = Field(default=None, ge=0)  # verified viewer purchase price
+    max_coins: Optional[int] = Field(default=None, ge=0)
     keyword: Optional[str] = None            # dla triggera "comment"
     like_threshold: Optional[int] = None     # co ile lajków odpalić (np. co 100)
 
@@ -71,6 +73,8 @@ class TikTokEvent(BaseModel):
     gift_image_url: Optional[str] = None
     diamonds: int = 0
     diamonds_estimated: bool = False
+    gift_coins: int = 0
+    gift_coins_estimated: bool = True
     repeat_count: int = 1
     repeat_end: bool = True                  # True = koniec streaka (akcja dopiero wtedy)
     comment: Optional[str] = None
@@ -140,6 +144,6 @@ KNOWN_ACTIONS: list[str] = [
     "heal", "drop_diamond", "drop_item", "give_item",
     "move_left", "move_right", "jump", "shield", "speed_boost",
     "teleport", "spawn_wall", "change_weather", "change_time",
-    "parkour_level_forward", "parkour_level_back", "parkour_jail", "parkour_reset", "parkour_antireset",
+    "parkour_push", "parkour_level_forward", "parkour_level_back", "parkour_jail", "parkour_reset", "parkour_antireset",
     "screen_shake", "confetti", "vote", "custom",
 ]

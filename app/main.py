@@ -24,7 +24,7 @@ from . import presets as preset_store
 from . import earnings as earnings_tracker
 from .bridge import Hub
 from .engine import Engine
-from .gifts import list_gifts, record_event, refresh_tiktok_catalog
+from .gifts import coin_price_for_gift, list_gifts, record_event, refresh_tiktok_catalog
 from .games import GAMES, get_game
 from .minecraft import ServerTapClient, validate_base_url
 from .parkour_server import ParkourServer
@@ -181,11 +181,17 @@ engine = Engine(on_action=publish_game_action)
 async def process_event(ev: TikTokEvent) -> None:
     if ev.viewer_count:
         hub.viewer_count = ev.viewer_count
-    if ev.type == "gift" and ev.diamonds <= 0:
-        resolved, from_catalog = earnings_tracker.resolve_diamonds(ev.gift_id, ev.gift_name, ev.diamonds)
-        if resolved > 0:
-            ev.diamonds = resolved
-            ev.diamonds_estimated = from_catalog
+    if ev.type == "gift":
+        if ev.diamonds <= 0:
+            resolved, from_catalog = earnings_tracker.resolve_diamonds(ev.gift_id, ev.gift_name, ev.diamonds)
+            if resolved > 0:
+                ev.diamonds = resolved
+                ev.diamonds_estimated = from_catalog
+        if ev.gift_coins <= 0 or ev.gift_coins_estimated:
+            coins, estimated = coin_price_for_gift(ev.gift_id, ev.gift_name)
+            if coins > 0:
+                ev.gift_coins = coins
+                ev.gift_coins_estimated = estimated
     record_event(ev)
     await hub.publish_event(ev)
     await engine.handle(ev)
@@ -254,12 +260,42 @@ def _refresh_catalog_safely() -> int:
         return 0
 
 
+_LEGACY_PARKOUR_DESCRIPTION = "Gotowe akcje dla dołączonej mapy 100 Levels: przesuwanie poziomu, więzienie, reset z 60-sekundowym odliczaniem i anty-reset. Wymaga lokalnego serwera GiftStream."
+_LEGACY_PARKOUR_RULES = {
+    "mp-rose": ("Róża → następny poziom", "gift", "Rose", "parkour_level_forward"),
+    "mp-tiktok": ("TikTok → poprzedni poziom", "gift", "TikTok", "parkour_level_back"),
+    "mp-follow": ("Follow → więzienie", "follow", None, "parkour_jail"),
+    "mp-donut": ("Donut → awans o poziom", "gift", "Donut", "parkour_level_forward"),
+    "mp-dragon": ("Smok → reset za 60 s", "gift", "Dragon", "parkour_reset"),
+    "mp-antireset": ("Anty-reset → anuluj reset", "gift", "Panda", "parkour_antireset"),
+}
+
+
+def _migrate_builtin_parkour_preset() -> bool:
+    """Update only the untouched built-in v0.6.4 parkour preset, never user-edited rules."""
+    old = preset_store.get_preset("minecraft-parkour")
+    if old is None or old.description != _LEGACY_PARKOUR_DESCRIPTION or len(old.rules) != len(_LEGACY_PARKOUR_RULES):
+        return False
+    for rule in old.rules:
+        expected = _LEGACY_PARKOUR_RULES.get(rule.id)
+        actual = (rule.name, rule.trigger.type, rule.trigger.gift_name, rule.action.type)
+        if expected is None or actual != expected or rule.trigger.min_coins is not None or rule.trigger.max_coins is not None:
+            return False
+    game = get_game("minecraft-parkour")
+    if game is None:
+        return False
+    preset_store.save_preset(Preset(id=game["preset_id"], name=game["title"],
+                                    description=game["description"], rules=game["rules"]))
+    return True
+
+
 @app.on_event("startup")
 async def startup() -> None:
     global config, _catalog_refresh_task, _catalog_refresh_started, _currency_refresh_task, _gift_refresh_loop_task
     preset_store.ensure_default()
     config = read_config()
     sync_minecraft_client()
+    _migrate_builtin_parkour_preset()
     engine.load_preset(config.active_preset_id)
     # TikTok's public catalog is loaded once in the background; the panel remains usable offline.
     if not _catalog_refresh_started:
@@ -553,7 +589,7 @@ async def parkour_enabled(request: dict[str, bool]) -> dict[str, Any]:
 
 @app.post("/api/minecraft/parkour/action")
 async def parkour_test_action(req: ParkourActionRequest) -> dict[str, Any]:
-    allowed = {"parkour_level_forward", "parkour_level_back", "parkour_jail", "parkour_reset", "parkour_antireset"}
+    allowed = {"parkour_push", "parkour_level_forward", "parkour_level_back", "parkour_jail", "parkour_reset", "parkour_antireset"}
     if req.action not in allowed:
         raise HTTPException(400, "Nieznana akcja parkour.")
     await _run_parkour_action(GameAction(action=req.action, params={"player": req.player} if req.player else {}))
@@ -569,7 +605,7 @@ async def actions() -> list[dict]:
               "speed_boost":"Przyspieszenie", "teleport":"Teleport", "spawn_wall":"Stwórz przeszkodę",
               "change_weather":"Zmień pogodę", "change_time":"Zmień porę dnia", "screen_shake":"Trzęsienie ekranu",
               "confetti":"Konfetti", "vote":"Głosowanie", "custom":"Akcja własna"}
-    labels.update({"parkour_level_forward":"Parkour: kolejny poziom", "parkour_level_back":"Parkour: poprzedni poziom",
+    labels.update({"parkour_push":"Parkour: delikatny push", "parkour_level_forward":"Parkour: kolejny poziom", "parkour_level_back":"Parkour: poprzedni poziom",
                    "parkour_jail":"Parkour: więzienie", "parkour_reset":"Parkour: reset za 60 s",
                    "parkour_antireset":"Parkour: anty-reset"})
     return [{"id": x, "label": labels.get(x, x.replace("_", " ").title())} for x in KNOWN_ACTIONS]

@@ -81,8 +81,10 @@ def record_event(event: TikTokEvent) -> None:
                  "name": event.gift_name,
                  "label_pl": label_pl(event.gift_name),
                  "diamonds": event.diamonds or old.get("diamonds", 0),
-                 "coins": old.get("coins", event.diamonds or old.get("diamonds", 0)),
-                 "coins_estimated": old.get("coins_estimated", True),
+                 "coins": (event.gift_coins if event.gift_coins > 0 and not event.gift_coins_estimated
+                           else old.get("coins", event.diamonds or old.get("diamonds", 0))),
+                 "coins_estimated": (False if event.gift_coins > 0 and not event.gift_coins_estimated
+                                     else old.get("coins_estimated", True)),
                  "image_url": _safe_tiktok_image(event.gift_image_url) or old.get("image_url"),
                  "source": "tiktok-live" if event.source in {"tiktok", "managed"} else event.source,
                  "streakable": old.get("streakable", False)}
@@ -200,6 +202,25 @@ def refresh_tiktok_catalog() -> int:
 
     with _refresh_lock:
         return asyncio.run(fetch())
+
+
+def coin_price_for_gift(gift_id: int | None, gift_name: str | None) -> tuple[int, bool]:
+    """Return cached viewer coin cost and whether that cost is an estimate.
+
+    Never substitute creator diamonds for viewer coins: price gates can require only
+    values explicitly supplied as coin_count/coinCount/coins by catalog metadata.
+    """
+    entries = list_gifts()
+    match = next((gift for gift in entries if gift_id is not None and str(gift.get("id")) == str(gift_id)), None)
+    if match is None and gift_name:
+        match = next((gift for gift in entries if str(gift.get("name", "")).casefold() == gift_name.casefold()), None)
+    if match is None:
+        return 0, True
+    try:
+        coins = max(0, int(match.get("coins", 0) or 0))
+    except (TypeError, ValueError):
+        return 0, True
+    return coins, bool(match.get("coins_estimated", True))
 
 
 def list_gifts(query: str = "", sort: str = "price_asc") -> list[dict[str, Any]]:

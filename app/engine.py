@@ -10,6 +10,7 @@ import time
 from collections.abc import Awaitable, Callable
 
 from . import presets as store
+from .gifts import coin_price_for_gift
 from .models import GameAction, Preset, Rule, TikTokEvent
 
 OnAction = Callable[[GameAction], Awaitable[None]]
@@ -42,6 +43,18 @@ class Engine:
                 return False
             if t.min_diamonds is not None and ev.diamonds < t.min_diamonds:
                 return False
+            if t.min_coins is not None or t.max_coins is not None:
+                coins, estimated = ev.gift_coins, ev.gift_coins_estimated
+                if coins <= 0 or estimated:
+                    coins, estimated = coin_price_for_gift(ev.gift_id, ev.gift_name)
+                # Coin tiers require explicit TikTok coin prices; never treat diamonds or
+                # an estimated catalog value as a viewer purchase price.
+                if estimated or coins <= 0:
+                    return False
+                if t.min_coins is not None and coins < t.min_coins:
+                    return False
+                if t.max_coins is not None and coins > t.max_coins:
+                    return False
             # Streaki: akcję odpalamy dopiero na końcu streaka (repeat_end),
             # chyba że prezent nie jest streakowalny (repeat_count == 1).
             if not ev.repeat_end and ev.repeat_count > 1:

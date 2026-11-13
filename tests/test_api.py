@@ -1,7 +1,29 @@
 from fastapi.testclient import TestClient
 
 from app import main
-from app.models import AppConfig
+from app.models import AppConfig, Preset, Rule
+
+
+def test_builtin_parkour_preset_migrates_only_when_untouched(monkeypatch):
+    legacy_rules = []
+    for rule_id, (name, trigger_type, gift_name, action_type) in main._LEGACY_PARKOUR_RULES.items():
+        trigger = {"type": trigger_type}
+        if gift_name:
+            trigger["gift_name"] = gift_name
+        legacy_rules.append(Rule(id=rule_id, name=name, trigger=trigger, action={"type": action_type}))
+    old = Preset(id="minecraft-parkour", name="Minecraft: parkour na żywo",
+                 description=main._LEGACY_PARKOUR_DESCRIPTION, rules=legacy_rules)
+    saved = []
+    monkeypatch.setattr(main.preset_store, "get_preset", lambda _id: old)
+    monkeypatch.setattr(main.preset_store, "save_preset", lambda preset: saved.append(preset) or preset)
+    assert main._migrate_builtin_parkour_preset() is True
+    assert saved[0].rules[0].action.type == "parkour_push"
+    assert next(r for r in saved[0].rules if r.action.type == "parkour_reset").trigger.min_coins == 1000
+
+    saved.clear()
+    old.rules[0].name = "My custom push"
+    assert main._migrate_builtin_parkour_preset() is False
+    assert saved == []
 
 
 def test_public_config_never_returns_integration_secrets(monkeypatch):

@@ -35,7 +35,22 @@ def test_parkour_setup_requires_eula_before_any_download(monkeypatch, tmp_path):
     assert not (tmp_path / "MinecraftParkour").exists()
 
 
+def test_push_action_uses_a_small_local_knockback_and_validates_player(monkeypatch):
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
+    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
+    message = server.execute_action("parkour_push")
+    assert "3 bloki" in message
+    assert commands == [
+        "effect give Streamer minecraft:slow_falling 3 0 true",
+        "execute as Streamer at Streamer run tp @s ^ ^0.6 ^-3",
+    ]
+    with pytest.raises(ValueError):
+        server.execute_action("parkour_push", "bad player")
+
+
 def test_parkour_action_allowlist_is_fixed():
     from app.models import KNOWN_ACTIONS
-    assert {"parkour_level_forward", "parkour_level_back", "parkour_jail",
+    assert {"parkour_push", "parkour_level_forward", "parkour_level_back", "parkour_jail",
             "parkour_reset", "parkour_antireset"}.issubset(KNOWN_ACTIONS)

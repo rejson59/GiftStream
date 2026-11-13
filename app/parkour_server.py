@@ -322,6 +322,12 @@ class ParkourServer:
         player = player or str(state.get("player", ""))
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Najpierw ustaw nick gracza Minecraft.")
+        if action == "parkour_push":
+            commands = [f"effect give {player} minecraft:slow_falling 3 0 true",
+                        f"execute as {player} at {player} run tp @s ^ ^0.6 ^-3"]
+            for command in commands:
+                self._rcon(command)
+            return "Delikatnie odrzucono gracza o 3 bloki do tyłu."
         if action in {"parkour_level_forward", "parkour_level_back"}:
             areas = map_level_areas()
             current = self.get_player_level(player)
