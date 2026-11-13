@@ -445,15 +445,18 @@ def test_server_properties_and_existing_install_disable_whitelist(tmp_path):
     properties = tmp_path / "server.properties"
     _write_server_properties(properties, "secret")
     text = properties.read_text(encoding="utf-8")
+    assert "online-mode=false" in text
     assert "white-list=false" in text
     assert "enforce-whitelist=false" in text
 
-    properties.write_text("motd=GiftStream\nwhite-list=true\nenforce-whitelist=true\n", encoding="utf-8")
+    properties.write_text("motd=GiftStream\nonline-mode=true\nwhite-list=true\nenforce-whitelist=true\n", encoding="utf-8")
     _disable_server_whitelist(properties)
     text = properties.read_text(encoding="utf-8")
     assert "motd=GiftStream" in text
+    assert "online-mode=false" in text
     assert "white-list=false" in text
     assert "enforce-whitelist=false" in text
+    assert "online-mode=true" not in text
     assert "white-list=true" not in text
 
 

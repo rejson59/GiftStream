@@ -505,7 +505,8 @@ def _write_server_properties(path: Path, password: str) -> None:
         "enable-rcon": "true",
         "rcon.port": "25575",
         "rcon.password": password,
-        "online-mode": "true",
+        # This server is loopback-only; avoid Mojang session-server throttling for local joins.
+        "online-mode": "false",
         "white-list": "false",
         "enforce-whitelist": "false",
         "gamemode": "adventure",
@@ -521,12 +522,12 @@ def _write_server_properties(path: Path, password: str) -> None:
 
 
 def _disable_server_whitelist(properties: Path) -> None:
-    """Keep the GiftStream's private localhost server joinable without whitelist setup."""
+    """Keep the private localhost server joinable without online authentication or a whitelist."""
     try:
         lines = properties.read_text(encoding="utf-8").splitlines()
     except OSError:
         return
-    overrides = {"white-list": "false", "enforce-whitelist": "false"}
+    overrides = {"online-mode": "false", "white-list": "false", "enforce-whitelist": "false"}
     seen: set[str] = set()
     updated: list[str] = []
     for line in lines:
