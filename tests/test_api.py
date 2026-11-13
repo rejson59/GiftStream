@@ -248,3 +248,66 @@ def test_update_ui_can_only_request_a_published_update(tmp_path):
     assert client.post("/api/updates/apply").json()["ok"] is True
     assert update_state.take_apply_request() == executable
     update_state.clear()
+
+
+def test_local_audio_upload_is_validated_persistent_and_selectable(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "_SOUND_UPLOAD_DIR", tmp_path / "sounds")
+    monkeypatch.setattr(main, "config", AppConfig())
+    client = TestClient(main.app)
+    uploaded = client.post("/api/sounds/upload?filename=custom.mp3", content=b"ID3\x04\x00\x00sample-audio",
+                           headers={"Content-Type": "audio/mpeg"})
+    assert uploaded.status_code == 200
+    asset = uploaded.json()
+    assert asset["name"] == "custom.mp3"
+    assert asset["url"].startswith("/api/sounds/uploads/")
+    media = client.get(asset["url"])
+    assert media.status_code == 200 and media.content.startswith(b"ID3")
+    assert media.headers["content-type"] == "audio/mpeg"
+    selected = client.put("/api/config", json={"sound_url": asset["url"], "sound_label": asset["name"]})
+    assert selected.status_code == 200
+    assert selected.json()["sound_url"] == asset["url"]
+    assert client.get(asset["url"]).status_code == 200
+
+
+def test_audio_upload_rejects_bad_extension_and_mismatched_payload(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "_SOUND_UPLOAD_DIR", tmp_path / "sounds")
+    client = TestClient(main.app)
+    assert client.post("/api/sounds/upload?filename=notes.txt", content=b"not audio").status_code == 415
+    assert client.post("/api/sounds/upload?filename=voice.wav", content=b"ID3 fake mp3").status_code == 415
+
+
+def test_gift_art_proxy_allows_only_tiktok_cdn_and_returns_image(monkeypatch):
+    monkeypatch.setattr(main, "_download_tiktok_image", lambda _url: (b"image-bytes", "image/webp"))
+    client = TestClient(main.app)
+    response = client.get("/api/gifts/image", params={"url": "https://p16-sign.tiktokcdn.com/gift.webp"})
+    assert response.status_code == 200
+    assert response.content == b"image-bytes"
+    assert response.headers["content-type"] == "image/webp"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    blocked = client.get("/api/gifts/image", params={"url": "https://example.com/not-an-image.png"})
+    assert blocked.status_code == 400
+    def fail_download(_url):
+        raise OSError("CDN offline")
+
+    monkeypatch.setattr(main, "_download_tiktok_image", fail_download)
+    unavailable = client.get("/api/gifts/image", params={"url": "https://p16-sign.tiktokcdn.com/expired.webp"})
+    assert unavailable.status_code == 404
+    assert unavailable.headers["cache-control"] == "public, max-age=300"
+
+
+def test_rule_editor_has_searchable_gift_picker_and_audio_upload_controls():
+    page = TestClient(main.app).get("/").text
+    assert 'id="rule-gift-search"' in page
+    assert 'role="listbox"' in page
+    assert 'id="rule-sound-choice"' in page
+    assert 'id="sound-file"' in page
+    assert 'id="upload-sound"' in page
+
+
+def test_gift_library_search_passes_the_name_query_to_the_catalog(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "list_gifts", lambda query="", sort="price_asc": calls.append((query, sort)) or [{"name": "Galaxy"}])
+    response = TestClient(main.app).get("/api/gifts", params={"q": "galaxy", "sort": "popular"})
+    assert response.status_code == 200
+    assert response.json() == [{"name": "Galaxy"}]
+    assert calls == [("galaxy", "popular")]

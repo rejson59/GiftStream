@@ -10,13 +10,14 @@ import secrets
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
@@ -424,6 +425,111 @@ app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 
 # -- API -------------------------------------------------------------------
+_TIKTOK_IMAGE_HOSTS = ("tiktokcdn.com", "tiktokcdn-us.com", "tiktokcdn-eu.com")
+_SOUND_UPLOAD_DIR = DATA / "uploads" / "sounds"
+_SOUND_UPLOAD_LIMIT = 10 * 1024 * 1024
+_SOUND_MIME = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+               ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac"}
+_SOUND_FILE_RE = re.compile(r"^[a-f0-9]{32}\.(?:mp3|wav|ogg|m4a|aac|flac)$")
+
+
+def _trusted_tiktok_image_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        return (parsed.scheme == "https" and parsed.port in (None, 443) and
+                not parsed.username and not parsed.password and
+                any(host == domain or host.endswith("." + domain) for domain in _TIKTOK_IMAGE_HOSTS))
+    except ValueError:
+        return False
+
+
+class _TikTokImageRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urljoin(req.full_url, newurl)
+        if not _trusted_tiktok_image_url(target):
+            raise urllib.error.HTTPError(target, code, "TikTok CDN redirected outside its trusted hosts", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, target)
+
+
+def _download_tiktok_image(url: str) -> tuple[bytes, str]:
+    if not _trusted_tiktok_image_url(url):
+        raise ValueError("Nieobsługiwany adres grafiki TikToka.")
+    request = urllib.request.Request(url, headers={"User-Agent": "GiftStream/1", "Referer": "https://www.tiktok.com/"})
+    opener = urllib.request.build_opener(_TikTokImageRedirect())
+    with opener.open(request, timeout=8) as response:
+        if not _trusted_tiktok_image_url(response.geturl()):
+            raise ValueError("Przekierowanie grafiki wyszło poza CDN TikToka.")
+        media_type = response.headers.get_content_type().lower()
+        if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}:
+            raise ValueError("CDN TikToka nie zwrócił obsługiwanej grafiki rastrowej.")
+        payload = response.read(4 * 1024 * 1024 + 1)
+    if not payload or len(payload) > 4 * 1024 * 1024:
+        raise ValueError("Grafika jest pusta albo przekracza limit 4 MB.")
+    return payload, media_type
+
+
+@app.get("/api/gifts/image")
+async def gift_image(url: str) -> Response:
+    if not _trusted_tiktok_image_url(url):
+        raise HTTPException(400, "Adres grafiki musi należeć do zaufanego CDN TikToka.")
+    try:
+        payload, media_type = await asyncio.to_thread(_download_tiktok_image, url)
+    except Exception as exc:
+        # Missing CDN art is expected for gifts that TikTok no longer serves;
+        # return a cacheable non-server error so a long feed cannot flood diagnostics.
+        raise HTTPException(404, f"Grafika niedostępna z CDN TikToka: {exc}",
+                            headers={"Cache-Control": "public, max-age=300"}) from exc
+    return Response(payload, media_type=media_type,
+                    headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+@app.post("/api/sounds/upload")
+async def upload_sound(request: Request, filename: str = "") -> dict[str, Any]:
+    safe_name = Path(filename.replace("\\", "/")).name[:160]
+    suffix = Path(safe_name).suffix.lower()
+    media_type = _SOUND_MIME.get(suffix)
+    if not media_type:
+        raise HTTPException(415, "Wybierz plik MP3, WAV, OGG, M4A, AAC lub FLAC.")
+    try:
+        content_length = int(request.headers.get("content-length", "0") or 0)
+    except ValueError:
+        content_length = 0
+    if content_length > _SOUND_UPLOAD_LIMIT:
+        raise HTTPException(413, "Plik dźwiękowy przekracza limit 10 MB.")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > _SOUND_UPLOAD_LIMIT:
+            raise HTTPException(413, "Plik dźwiękowy przekracza limit 10 MB.")
+        chunks.append(chunk)
+    payload = b"".join(chunks)
+    signatures = {".wav": lambda b: len(b) > 12 and b[:4] == b"RIFF" and b[8:12] == b"WAVE",
+                  ".ogg": lambda b: b.startswith(b"OggS"), ".flac": lambda b: b.startswith(b"fLaC"),
+                  ".m4a": lambda b: len(b) > 8 and b[4:8] == b"ftyp",
+                  ".aac": lambda b: len(b) > 2 and b[0] == 0xff and (b[1] & 0xf6) == 0xf0,
+                  ".mp3": lambda b: b.startswith(b"ID3") or (len(b) > 1 and b[0] == 0xff and (b[1] & 0xe0) == 0xe0)}
+    if not payload or not signatures[suffix](payload):
+        raise HTTPException(415, "Plik nie wygląda na dźwięk w formacie zgodnym z jego rozszerzeniem.")
+    _SOUND_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    asset = f"{uuid.uuid4().hex}{suffix}"
+    (_SOUND_UPLOAD_DIR / asset).write_bytes(payload)
+    diagnostics.info("Zapisano lokalny dźwięk użytkownika (%s, %s bajtów).", suffix, len(payload))
+    return {"url": f"/api/sounds/uploads/{asset}", "name": safe_name, "size": len(payload), "content_type": media_type}
+
+
+@app.get("/api/sounds/uploads/{filename}")
+async def uploaded_sound(filename: str) -> FileResponse:
+    if not _SOUND_FILE_RE.fullmatch(filename):
+        raise HTTPException(404, "Nie znaleziono pliku audio.")
+    path = _SOUND_UPLOAD_DIR / filename
+    if not path.is_file():
+        raise HTTPException(404, "Nie znaleziono pliku audio.")
+    return FileResponse(path, media_type=_SOUND_MIME[path.suffix],
+                        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
 @app.get("/api/sounds/myinstants")
 async def myinstants_search(q: str = "") -> dict[str, Any]:
     if len(q) > 100:
@@ -539,7 +645,11 @@ async def update_config(data: dict[str, Any]) -> dict:
     global config
     if "sound_url" in data:
         url = str(data["sound_url"] or "").strip()
-        if url:
+        if url.startswith("/api/sounds/uploads/"):
+            filename = url.rsplit("/", 1)[-1]
+            if not _SOUND_FILE_RE.fullmatch(filename) or not (_SOUND_UPLOAD_DIR / filename).is_file():
+                raise HTTPException(422, "Nie znaleziono przesłanego pliku dźwiękowego.")
+        elif url:
             parsed = urlparse(url)
             hostname = (parsed.hostname or "").lower().rstrip(".")
             try:
@@ -551,7 +661,7 @@ async def update_config(data: dict[str, Any]) -> dict:
                     parsed.username or parsed.password or unsafe_ip or
                     hostname in {"localhost", "metadata.google.internal"} or
                     hostname.endswith((".localhost", ".local", ".internal"))):
-                raise HTTPException(422, "Dźwięk musi wskazywać publiczny adres HTTPS bez danych logowania ani adresu lokalnego.")
+                raise HTTPException(422, "Dźwięk musi wskazywać publiczny adres HTTPS albo lokalnie wgrany plik.")
         data["sound_url"] = url
     merged = {**config.model_dump(), **data}
     try:

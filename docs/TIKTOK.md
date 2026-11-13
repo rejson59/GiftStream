@@ -18,7 +18,11 @@ Select **Managed API** and configure `TIKTOOL_API_KEY` in `.env`. The adapter us
 
 ## Biblioteka oryginalnych giftów
 
-GiftStream odświeża publiczny katalog TikToka w tle i przechowuje do 1000 wpisów, także wtedy, gdy gift nie ma grafiki. Zapisuje ID, nazwę, diamenty twórcy, jawne pola ceny monet (jeżeli źródło je udostępnia), informację o serii i bezpośredni URL grafiki. Gift po LIVE może uzupełnić katalog o cenę jawnie przekazaną przez event; późniejszy wpis bez ceny nie nadpisuje zaobserwowanej wartości. Biblioteka OBS korzysta z oryginalnego obrazka TikToka, a brak grafiki nie ukrywa prezentu. Cena monet nie jest zgadywana z diamentów — jeżeli TikTok jej nie dostarcza, nie da się jej rzetelnie wyliczyć automatycznie. Ceny i lista giftów zależą od regionu i zmian po stronie TikToka.
+GiftStream odświeża publiczny katalog TikToka i przechowuje do 1000 wpisów, także wtedy, gdy gift nie ma grafiki. Zapisuje ID, nazwę, diamenty twórcy, jawne pola ceny monet (jeżeli źródło je udostępnia), informację o serii i bezpośredni URL grafiki. Obrazki panelu i nakładki są pobierane przez lokalny proxy z ograniczeniem do zaufanych domen CDN TikToka, co pomaga przy blokowaniu hotlinków; po błędzie aplikacja raz próbuje odświeżyć katalog. Brak grafiki nie ukrywa prezentu. W bibliotece wpisz nazwę w pole wyszukiwania; w kreatorze reguł także wpisz nazwę w polu „Prezent”, aby filtrować listę zamiast przewijać. Cena monet nie jest zgadywana z diamentów — jeżeli TikTok jej nie dostarcza, nie da się jej rzetelnie wyliczyć automatycznie. Ceny i lista giftów zależą od regionu i zmian po stronie TikToka.
+
+## Dźwięki i reguły
+
+W menu **Dźwięki i alerty** wyszukaj publiczne dźwięki MyInstants, odsłuchaj je i wybierz. Tam można również wgrać własny plik audio MP3, WAV, OGG, M4A, AAC lub FLAC do 10 MB albo wkleić publiczny link HTTPS. W edytorze reguły wybierz „Użyj dźwięku wybranego w Studio”, aby przypisać aktualnie wybrany dźwięk do konkretnej akcji. Reguła zapisuje kopię wybranego adresu; po zmianie dźwięku w Studio ponownie zapisz regułę, jeśli chcesz zmienić także dźwięk akcji. Własne pliki są przechowywane lokalnie w danych GiftStream; starsze pliki pozostają, aby już zapisane reguły nie utraciły swojego dźwięku po zmianie globalnego alertu. Wyszukiwarka MyInstants jest nieoficjalna i zależy od ich strony oraz dostępności pliku.
 
 ## Orientacyjny kalkulator zarobku twórcy
 

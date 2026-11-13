@@ -16,6 +16,17 @@ def test_gift_matches_configured_rule():
     assert actions[0].params["count"] == 2
 
 
+def test_selected_rule_sound_is_passed_to_the_action_event():
+    engine = Engine()
+    sound_url = "/api/sounds/uploads/0123456789abcdef0123456789abcdef.mp3"
+    engine.active_preset = Preset(id="test", name="test", rules=[
+        Rule(id="rose", trigger={"type": "gift", "gift_name": "Rose"},
+             action={"type": "parkour_push"}, sound=sound_url)
+    ])
+    actions = asyncio.run(engine.handle(TikTokEvent(type="gift", user="viewer", gift_name="Rose")))
+    assert actions[0].params["sound"] == sound_url
+
+
 def test_gift_name_is_case_insensitive_and_other_gift_does_not_match():
     engine = Engine()
     engine.active_preset = Preset(id="test", name="test", rules=[
