@@ -14,6 +14,7 @@ import struct
 import subprocess
 import time
 import tempfile
+import threading
 import urllib.parse
 import urllib.request
 import zipfile
@@ -33,6 +34,7 @@ _VERSION_CACHE: tuple[float, dict[str, Any]] | None = None
 _VERSION_CACHE_TTL = 600
 _VERSION_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
 _WINDOWS_PROCESS_CACHE: tuple[float, list[dict[str, Any]]] = (0.0, [])
+_START_LOCK = threading.Lock()
 
 
 def _write_parkour_settings(state: dict[str, Any]) -> None:
@@ -395,6 +397,57 @@ def _download_server_jar(server_dir: Path, requested_version: str = "latest") ->
     return destination, required_java, selected, java_executable
 
 
+def _patch_map_datapack(world: Path) -> None:
+    """Adapt known 100 Levels resources to current datapack JSON and add a compact HUD."""
+    for name in ("disable", "enable"):
+        modifier = world / "datapacks/main/data/common/item_modifier/training_mode/glint" / f"{name}.json"
+        try:
+            value = json.loads(modifier.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Nie udało się odczytać modyfikatora mapy {modifier.name}: {exc}") from exc
+        # Minecraft 26.3 expects one item-modifier object per resource. The
+        # bundled 1.7.4 datapack wraps this one modifier in an obsolete array.
+        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict):
+            value = value[0]
+        if not isinstance(value, dict) or value.get("function") != "minecraft:set_components":
+            raise ValueError(f"Nieznany format modyfikatora mapy {modifier.name}; nie można go bezpiecznie migrować.")
+        modifier.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    # The map already renders its timer in the actionbar. Add the player's
+    # scoreboard level to those same actionbar messages (rather than replacing
+    # the timer or taking over the map's optional sidebar scoreboard).
+    timer_display = world / "datapacks/main/data/common/function/timer/display.mcfunction"
+    try:
+        lines = timer_display.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError(f"Brakuje funkcji wyświetlania timera mapy: {exc}") from exc
+    updated = []
+    hud = [
+        {"text": "LEVEL ", "color": "yellow", "bold": True},
+        {"score": {"objective": "level", "name": "@s"}, "color": "yellow", "bold": True},
+        {"text": " / 100  ·  ", "color": "dark_gray"},
+    ]
+    for line in lines:
+        if " actionbar " not in line:
+            updated.append(line)
+            continue
+        command, payload = line.split(" actionbar ", 1)
+        try:
+            components = json.loads(payload)
+        except ValueError as exc:
+            raise ValueError("Nie udało się zaktualizować wyświetlania timera mapy.") from exc
+        if not isinstance(components, list):
+            raise ValueError("Nieznany format wyświetlania timera mapy.")
+        if not any(isinstance(component, dict)
+                   and component.get("score", {}).get("objective") == "level"
+                   for component in components):
+            components = hud + components
+        updated.append(command + " actionbar " + json.dumps(components, ensure_ascii=False, separators=(",", ":")))
+    if not any(" actionbar " in line for line in updated):
+        raise ValueError("Nie znaleziono wyświetlania actionbar timera mapy.")
+    timer_display.write_text("\n".join(updated) + "\n", encoding="utf-8")
+
+
 def _extract_map(archive: Path, destination: Path) -> None:
     with zipfile.ZipFile(archive) as zf:
         infos = [item for item in zf.infolist() if not item.is_dir()]
@@ -539,6 +592,7 @@ class ParkourServer:
         root.mkdir(parents=True, exist_ok=True)
         if (state.get("server_dir") == str(root) and state.get("minecraft_version") == selected_version
                 and (root / "server.jar").is_file() and (root / "world" / "level.dat").is_file()):
+            _patch_map_datapack(root / "world")
             self.start()
             return self.status()
         if any(root.iterdir()):
@@ -558,6 +612,8 @@ class ParkourServer:
             phase = "rozpakowywanie mapy"
             map_stage.mkdir()
             _extract_map(_map_archive(), map_stage)
+            _patch_map_datapack(map_stage)
+            diagnostics.info("Datapack mapy zaktualizowano pod Minecraft 26.3; HUD poziomu zachowuje istniejący timer.")
             staged_level = map_stage / "level.dat"
             if not staged_level.is_file():
                 raise FileNotFoundError(f"Po rozpakowaniu mapy brakuje pliku {staged_level}.")
@@ -592,6 +648,11 @@ class ParkourServer:
         return self.status()
 
     def start(self) -> dict[str, Any]:
+        # Serialize startup requests so rapid clicks/API retries cannot spawn two JVMs.
+        with _START_LOCK:
+            return self._start_once()
+
+    def _start_once(self) -> dict[str, Any]:
         state = self.settings()
         root = Path(str(state.get("server_dir", "")))
         diagnostics.info("Żądanie uruchomienia serwera Minecraft (wersja %s, katalog %s).",
@@ -610,6 +671,11 @@ class ParkourServer:
             return self.status()
         except Exception:
             pass
+        try:
+            _patch_map_datapack(root / "world")
+        except Exception as exc:
+            diagnostics.error("Nie udało się przygotować datapacku 100 Levels przed startem: %s", exc, exc_info=exc)
+            raise RuntimeError(f"Nie udało się przygotować mapy 100 Levels: {exc}") from exc
         try:
             required_java = int(state.get("java_required") or 0)
             if required_java < 1:
@@ -727,6 +793,12 @@ class ParkourServer:
         if not self.settings():
             diagnostics.warning("Poproszono o zatrzymanie Minecraft, ale serwer nie jest skonfigurowany.")
             return self.status()
+        if self._process is not None and self._process.poll() is not None:
+            code = int(self._process.returncode or 0)
+            diagnostics.info("Serwer Minecraft był już zatrzymany (kod procesu %s); pomijam RCON stop.", code)
+            self._last_status_ready = False
+            return {**self.status(), "message": f"Serwer jest już zatrzymany (kod {code}); RCON nie jest potrzebny."}
+
         diagnostics.info("Wysyłam bezpieczne polecenie zatrzymania lokalnego serwera Minecraft.")
         try:
             self._rcon("stop")
@@ -734,6 +806,15 @@ class ParkourServer:
             if self._process is not None and self._process.poll() is None:
                 diagnostics.error("Nie udało się zatrzymać Minecraft przez RCON: %s", exc, exc_info=exc)
                 raise RuntimeError(f"Nie udało się zatrzymać serwera przez RCON: {exc}") from exc
+            # After a GiftStream restart there may be no tracked Popen handle. A
+            # refused connection plus a non-ready status is an idempotent stop,
+            # not an API error that encourages repeated stop/start attempts.
+            current = self.status()
+            if not current.get("running") and not current.get("ready"):
+                diagnostics.info("RCON niedostępny, a serwer nie działa; traktuję zatrzymanie jako zakończone.")
+                return {**current, "message": "Serwer jest już zatrzymany lub nie odpowiada przez RCON."}
+            diagnostics.error("Nie udało się zatrzymać Minecraft przez RCON: %s", exc, exc_info=exc)
+            raise RuntimeError(f"Nie udało się zatrzymać serwera przez RCON: {exc}") from exc
         self._last_status_ready = False
         return {**self.status(), "message": "Wysłano polecenie bezpiecznego zamknięcia serwera."}
 

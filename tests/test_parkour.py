@@ -46,6 +46,16 @@ def test_setup_stores_each_minecraft_version_in_a_separate_world(tmp_path, monke
     def fake_extract(_archive, stage):
         # _extract_map removes the ZIP's top-level "100 Levels" prefix.
         (stage / "level.dat").write_bytes(b"map data")
+        glint = stage / "datapacks/main/data/common/item_modifier/training_mode/glint"
+        glint.mkdir(parents=True)
+        for name in ("disable", "enable"):
+            (glint / f"{name}.json").write_text(json.dumps([{
+                "function": "minecraft:set_components",
+                "components": {"minecraft:enchantment_glint_override": name == "enable"},
+            }]), encoding="utf-8")
+        timer = stage / "datapacks/main/data/common/function/timer/display.mcfunction"
+        timer.parent.mkdir(parents=True)
+        timer.write_text('title @s actionbar [{"text":"timer"}]\n', encoding="utf-8")
 
     monkeypatch.setattr(parkour_server, "_download_server_jar", fake_download)
     monkeypatch.setattr(parkour_server, "_extract_map", fake_extract)
@@ -254,3 +264,146 @@ def test_parkour_action_allowlist_is_fixed():
     from app.models import KNOWN_ACTIONS
     assert {"parkour_push", "parkour_level_forward", "parkour_level_back", "parkour_jail",
             "parkour_reset", "parkour_antireset"}.issubset(KNOWN_ACTIONS)
+
+
+def test_map_datapack_migration_fixes_modifier_json_and_adds_level_timer_hud(tmp_path):
+    from app.parkour_server import _patch_map_datapack
+
+    glint = tmp_path / "datapacks/main/data/common/item_modifier/training_mode/glint"
+    glint.mkdir(parents=True)
+    original = [{"function": "minecraft:set_components",
+                 "components": {"minecraft:enchantment_glint_override": False}}]
+    (glint / "disable.json").write_text(json.dumps(original), encoding="utf-8")
+    original[0]["components"]["minecraft:enchantment_glint_override"] = True
+    (glint / "enable.json").write_text(json.dumps(original), encoding="utf-8")
+    timer = tmp_path / "datapacks/main/data/common/function/timer/display.mcfunction"
+    timer.parent.mkdir(parents=True)
+    timer.write_text('title @s actionbar [{"text":"timer"}]\n', encoding="utf-8")
+
+    _patch_map_datapack(tmp_path)
+    _patch_map_datapack(tmp_path)  # Reconfiguring an existing installation must not stack HUD prefixes.
+
+    for name in ("disable", "enable"):
+        resource = json.loads((glint / f"{name}.json").read_text(encoding="utf-8"))
+        assert isinstance(resource, dict)
+        assert resource["function"] == "minecraft:set_components"
+    line = timer.read_text(encoding="utf-8")
+    assert line.count('"objective":"level"') == 1
+    assert '"text":" / 100  ·  "' in line
+    assert '"text":"timer"' in line
+
+
+def test_stop_is_idempotent_when_tracked_server_process_has_exited(monkeypatch, tmp_path):
+    from app import parkour_server
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"server_dir": str(tmp_path), "rcon_host": "127.0.0.1",
+                                    "rcon_port": 25575, "rcon_password": "secret"}), encoding="utf-8")
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", settings)
+    monkeypatch.setattr(parkour_server, "_running_minecraft_clients", lambda: [])
+    server = ParkourServer()
+
+    class ExitedProcess:
+        returncode = 0
+
+        @staticmethod
+        def poll():
+            return 0
+
+    server._process = ExitedProcess()
+    monkeypatch.setattr(server, "_rcon", lambda _command: pytest.fail("must not contact RCON for an exited process"))
+    result = server.stop()
+    assert result["running"] is False
+    assert result["ready"] is False
+    assert "już zatrzymany" in result["message"]
+
+
+def test_stop_after_app_restart_treats_refused_rcon_as_already_stopped(monkeypatch, tmp_path):
+    from app import parkour_server
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"server_dir": str(tmp_path), "rcon_host": "127.0.0.1",
+                                    "rcon_port": 25575, "rcon_password": "secret"}), encoding="utf-8")
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", settings)
+    monkeypatch.setattr(parkour_server, "_running_minecraft_clients", lambda: [])
+    server = ParkourServer()
+    commands = []
+
+    def refused(command):
+        commands.append(command)
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr(server, "_rcon", refused)
+    result = server.stop()
+    assert result["running"] is False and result["ready"] is False
+    assert "już zatrzymany" in result["message"]
+    assert commands == ["stop", "list"]
+
+
+def test_exited_startup_process_is_never_reported_as_rcon_ready(monkeypatch, tmp_path):
+    from app import parkour_server
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"server_dir": str(tmp_path), "minecraft_version": "26.3",
+                                    "rcon_host": "127.0.0.1", "rcon_port": 25575,
+                                    "rcon_password": "secret"}), encoding="utf-8")
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", settings)
+    monkeypatch.setattr(parkour_server, "_running_minecraft_clients", lambda: [])
+    server = ParkourServer()
+
+    class ExitedProcess:
+        returncode = 0
+
+        @staticmethod
+        def poll():
+            return 0
+
+    server._process = ExitedProcess()
+    monkeypatch.setattr(server, "_rcon", lambda _command: pytest.fail("dead process must not be queried"))
+    result = server.status()
+    assert result["running"] is False and result["ready"] is False
+    assert "kod 0" in result["message"]
+
+
+def test_concurrent_start_requests_spawn_only_one_server_process(monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from app import parkour_server
+
+    server_dir = tmp_path / "server"
+    server_dir.mkdir()
+    (server_dir / "server.jar").write_bytes(b"jar")
+    (server_dir / "eula.txt").write_text("eula=true")
+    java = tmp_path / "java"
+    java.touch()
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"server_dir": str(server_dir), "java_required": 21,
+                                    "java_executable": str(java), "rcon_host": "127.0.0.1",
+                                    "rcon_port": 25575, "rcon_password": "secret"}), encoding="utf-8")
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", settings)
+    monkeypatch.setattr(parkour_server, "_java_major", lambda _path: 21)
+    monkeypatch.setattr(parkour_server, "_patch_map_datapack", lambda _world: None)
+    monkeypatch.setattr(parkour_server, "_running_minecraft_clients", lambda: [])
+    server = ParkourServer()
+    calls = []
+
+    class RunningProcess:
+        pid = 456
+        returncode = None
+
+        @staticmethod
+        def poll():
+            return None
+
+    def fake_popen(*_args, **_kwargs):
+        calls.append("spawn")
+        return RunningProcess()
+
+    def no_rcon(command):
+        raise ConnectionRefusedError(f"RCON unavailable for {command}")
+
+    monkeypatch.setattr(server, "_rcon", no_rcon)
+    monkeypatch.setattr(parkour_server.subprocess, "Popen", fake_popen)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: server.start(), range(2)))
+    assert calls == ["spawn"]
+    assert all(result["running"] and not result["ready"] for result in results)
