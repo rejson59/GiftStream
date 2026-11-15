@@ -200,9 +200,11 @@ def test_supported_actions_are_limited_to_built_in_minecraft_modes():
     assert response.status_code == 200
     assert {item["id"] for item in response.json()} == {
         "parkour_push", "parkour_level_forward", "parkour_level_back",
+        "parkour_level_jump_forward", "parkour_level_jump_back",
         "parkour_jail", "parkour_reset", "parkour_antireset", "parkour_checkpoint",
         "parkour_slow", "parkour_blind", "parkour_jump", "parkour_shield", "parkour_cleanse",
         "dropper_push", "dropper_level_forward", "dropper_level_back", "dropper_reset",
+        "dropper_level_jump_forward", "dropper_level_jump_back",
         "dropper_slow", "dropper_blind", "dropper_jump", "dropper_shield", "dropper_cleanse",
         "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_heart",
         "dropper_blackout", "dropper_lightning", "dropper_disco", "dropper_heart",
@@ -467,3 +469,46 @@ def test_overlay_arena_template_serves_editable_transparent_hud():
     assert 'event.gift_image_url||gift?.image_url' in js.text
     assert '.gift-reaction.is-visible' in css.text
     assert '.arena-density-bold' in css.text
+
+
+def test_level_jump_rules_are_added_to_an_existing_saved_preset(tmp_path, monkeypatch):
+    """An update must append the +10/-10 rules without touching the streamer's rules."""
+    from app import presets as preset_store_module
+    from app.models import Preset, Rule
+
+    saved = Preset(id="minecraft-parkour", name="Mine", description="old",
+                   rules=[Rule(id="mine-own", name="My own rule",
+                               trigger={"type": "gift", "gift_name": "Rose"},
+                               action={"type": "parkour_push"})])
+    store = {saved.id: saved}
+    monkeypatch.setattr(main.preset_store, "get_preset", lambda preset_id: store.get(preset_id))
+    monkeypatch.setattr(main.preset_store, "save_preset", lambda preset: store.__setitem__(preset.id, preset))
+
+    added = main._add_level_jump_rules()
+    assert sorted(added) == ["mp-jump-back", "mp-jump-forward"]
+    ids = [rule.id for rule in store["minecraft-parkour"].rules]
+    assert ids[0] == "mine-own"                      # the streamer's rule keeps its place
+    assert "mp-jump-forward" in ids and "mp-jump-back" in ids
+    # A preset with no single-step rule still gets them, appended at the end.
+    assert ids == ["mine-own", "mp-jump-forward", "mp-jump-back"]
+    # Running it again is a no-op, so a restart cannot duplicate rules.
+    assert main._add_level_jump_rules() == []
+
+
+def test_level_jump_rules_land_right_after_the_single_step_rules(tmp_path, monkeypatch):
+    from app.models import Preset, Rule
+
+    saved = Preset(id="minecraft-parkour", name="Mine", description="old",
+                   rules=[Rule(id="mp-forward", name="next", trigger={"type": "gift"},
+                               action={"type": "parkour_level_forward"}),
+                          Rule(id="mp-back", name="prev", trigger={"type": "gift"},
+                               action={"type": "parkour_level_back"}),
+                          Rule(id="mp-later", name="later", trigger={"type": "gift"},
+                               action={"type": "parkour_push"})])
+    store = {saved.id: saved}
+    monkeypatch.setattr(main.preset_store, "get_preset", lambda preset_id: store.get(preset_id))
+    monkeypatch.setattr(main.preset_store, "save_preset", lambda preset: store.__setitem__(preset.id, preset))
+
+    main._add_level_jump_rules()
+    assert [rule.id for rule in store["minecraft-parkour"].rules] == [
+        "mp-forward", "mp-back", "mp-jump-forward", "mp-jump-back", "mp-later"]

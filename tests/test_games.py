@@ -23,3 +23,14 @@ def test_only_supported_minecraft_modes_are_exposed():
     dropper_actions = {rule["action"]["type"] for rule in dropper["rules"]}
     assert {"dropper_push", "dropper_level_forward", "dropper_level_back", "dropper_reset"}.issubset(dropper_actions)
     assert Preset(id=dropper["preset_id"], name=dropper["title"], rules=dropper["rules"]).rules
+
+
+def test_level_jump_rules_ship_with_the_parkour_preset():
+    rules = {rule["id"]: rule for rule in get_game("minecraft-parkour")["rules"]}
+    up, down = rules["mp-jump-forward"], rules["mp-jump-back"]
+    assert up["action"] == {"type": "parkour_level_jump_forward", "params": {"levels": 10}}
+    assert down["action"] == {"type": "parkour_level_jump_back", "params": {"levels": 10}}
+    # Ten levels at once must be a premium gift, well above a single step.
+    assert up["trigger"]["min_coins"] >= 1000 and down["trigger"]["min_coins"] >= 1000
+    assert up["trigger"]["gift_name"] and down["trigger"]["gift_name"]
+    assert up["trigger"]["gift_name"] != down["trigger"]["gift_name"]

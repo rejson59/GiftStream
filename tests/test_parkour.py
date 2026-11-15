@@ -1207,3 +1207,71 @@ def test_reset_is_allowed_when_the_last_launch_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "status", lambda: {"ready": False})
     result = server.reset_world()
     assert "restored" in result["message"]
+
+
+def _level_jump_server(monkeypatch, start_level, position=None):
+    from app.parkour_server import level_checkpoint
+    server = ParkourServer()
+    # Standing on the checkpoint of `start_level`; the position is the source of truth.
+
+    x, y, z = position or level_checkpoint(start_level)
+    def rcon(command, **_kwargs):
+        if command.startswith("data get entity"):
+            return f"Streamer has the following entity data: [{x}d, {y}d, {z}d]"
+        return "ok"
+    monkeypatch.setattr(server, "_rcon", rcon)
+    return server
+
+
+def test_parkour_jumps_exactly_ten_levels_up(monkeypatch):
+    from app.parkour_server import level_checkpoint
+
+    commands = []
+    server = _level_jump_server(monkeypatch, 20)
+    original = server._rcon
+    def recording(command, **kwargs):
+        commands.append(command)
+        return original(command, **kwargs)
+    monkeypatch.setattr(server, "_rcon", recording)
+    assert server.execute_action("parkour_level_jump_forward", "Streamer", {"levels": 10}) == \
+        "Teleported 10 levels to the checkpoint of level 30/100 (20 → 30)."
+    x, y, z = level_checkpoint(30)
+    assert f"tp Streamer {x:.2f} {y:.2f} {z:.2f}" in commands
+
+
+def test_parkour_jumps_exactly_ten_levels_down(monkeypatch):
+    server = _level_jump_server(monkeypatch, 74)
+    assert server.execute_action("parkour_level_jump_back", "Streamer", {"levels": 10}) == \
+        "Teleported 10 levels to the checkpoint of level 64/100 (74 → 64)."
+
+
+def test_level_jump_defaults_to_ten_and_clamps_at_the_map_edges(monkeypatch):
+    server = _level_jump_server(monkeypatch, 95)
+    assert server.execute_action("parkour_level_jump_forward", "Streamer") == \
+        "Teleported 5 levels to the checkpoint of level 100/100 (95 → 100) (shortened by the map edge from 10)."
+    server = _level_jump_server(monkeypatch, 4)
+    assert server.execute_action("parkour_level_jump_back", "Streamer", {"levels": 10}) == \
+        "Teleported 3 levels to the checkpoint of level 1/100 (4 → 1) (shortened by the map edge from 10)."
+
+
+def test_level_jump_rejects_a_silly_distance(monkeypatch):
+    server = _level_jump_server(monkeypatch, 50)
+    with pytest.raises(ValueError, match="at least one level"):
+        server.execute_action("parkour_level_jump_forward", "Streamer", {"levels": 0})
+    with pytest.raises(ValueError, match="whole number"):
+        server.execute_action("parkour_level_jump_forward", "Streamer", {"levels": "ten"})
+
+
+def test_dropper_jumps_ten_levels(monkeypatch):
+    server = ParkourServer()
+    moved = []
+    from app import parkour_server as ps
+
+    state = {"player": "Streamer", "game_mode": "dropper", "dropper_map_initialized": True,
+             "dropper_player_levels": {"Streamer": 30}}
+    monkeypatch.setattr(server, "settings", lambda: state)
+    monkeypatch.setattr(ps, "_write_parkour_settings", lambda value: None)
+    monkeypatch.setattr(server, "_dropper_teleport", lambda player, stage: moved.append(stage))
+    assert server.execute_action("dropper_level_jump_forward", "Streamer", {"levels": 10}) == \
+        "Moved the player to level 40/100 (30 → 40)."
+    assert moved == [40]

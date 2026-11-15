@@ -1663,6 +1663,26 @@ class ParkourServer:
         self._last_daylight_check = now
         self.keep_daylight()
 
+    @staticmethod
+    def _level_jump(action: str, params: dict[str, Any], current: int) -> tuple[int, int]:
+        """Resolve a fixed-distance level jump ("10 levels up/down") into a target level.
+
+        Returns ``(target, requested)``; ``requested`` is the signed distance so the
+        caller can report an edge case honestly instead of silently doing nothing.
+        """
+        forward = action.endswith("forward")
+        step = 1 if forward else -1
+        raw = params.get("levels", 10)
+        try:
+            distance = abs(int(raw))
+        except (TypeError, ValueError):
+            raise ValueError("The level jump needs a whole number of levels.") from None
+        if distance < 1:
+            raise ValueError("A level jump needs at least one level.")
+        distance = min(distance, 99)
+        target = max(1, min(100, current + step * distance))
+        return target, step * distance
+
     def execute_action(self, action: str, player: str | None = None,
                        params: dict[str, Any] | None = None) -> str:
         state = self.settings()
@@ -1681,13 +1701,19 @@ class ParkourServer:
             if action == "dropper_push":
                 message = self.punch_player(player, str(state.get("minecraft_version", MAP_VERSION)))
                 return message + " Inside the shaft."
-            if action in {"dropper_level_forward", "dropper_level_back"}:
-                stage = self._dropper_lane(stage + (1 if action.endswith("forward") else -1))
-                levels[player] = stage
+            if action in {"dropper_level_forward", "dropper_level_back",
+                          "dropper_level_jump_forward", "dropper_level_jump_back"}:
+                if "jump" in action:
+                    target, _requested = self._level_jump(action, params, stage)
+                else:
+                    target = self._dropper_lane(stage + (1 if action.endswith("forward") else -1))
+                levels[player] = target
                 state.setdefault("dropper_completed_players", {}).pop(player, None)
-                self._dropper_teleport(player, stage)
+                self._dropper_teleport(player, target)
                 _write_parkour_settings(state)
-                return f"Moved the player to level {stage}/100."
+                if "jump" in action:
+                    return f"Moved the player to level {target}/100 ({stage} → {target})."
+                return f"Moved the player to level {target}/100."
             if action == "dropper_reset":
                 levels[player] = 1
                 state.setdefault("dropper_completed_players", {}).pop(player, None)
@@ -1729,13 +1755,25 @@ class ParkourServer:
             diagnostics.info("Punch II arrow sent to %s.", player)
             self.keep_daylight()
             return "A Punch II arrow flew at the player."
-        if action in {"parkour_level_forward", "parkour_level_back"}:
+        if action in {"parkour_level_forward", "parkour_level_back",
+                      "parkour_level_jump_forward", "parkour_level_jump_back"}:
             current = self.get_player_level_or_position(player)
-            step = 1 if action.endswith("forward") else -1
-            target = max(1, min(100, current + step))
+            if "jump" in action:
+                # "10 levels up/down at once" — one rule, fixed distance (params).
+                target, requested = self._level_jump(action, params, current)
+            else:
+                requested = 1 if action.endswith("forward") else -1
+                target = max(1, min(100, current + requested))
             if target == current:
-                edge = "last" if current == 100 and step > 0 else "first"
+                edge = "last" if requested > 0 else "first"
                 return f"Player is already on the {edge} level ({current}/100)."
+            if "jump" in action:
+                self.teleport_to_checkpoint(player, target)
+                diagnostics.info("Jumped %s by %s levels: %s → level %s.",
+                                 player, abs(requested), current, target)
+                distance = abs(target - current)
+                note = "" if distance == abs(requested) else f" (shortened by the map edge from {abs(requested)})"
+                return f"Teleported {distance} levels to the checkpoint of level {target}/100 ({current} → {target}){note}."
             self.teleport_to_checkpoint(player, target)
             diagnostics.info("Teleported %s to the checkpoint of level %s (was %s).", player, target, current)
             return f"Teleported to the checkpoint of level {target}/100 ({current} → {target})."

@@ -186,10 +186,12 @@ GIFT_CATALOG: list[dict[str, Any]] = [
 # Akcje gier — dokumentacja w docs/BRIDGE.md
 KNOWN_ACTIONS: list[str] = [
     "parkour_push", "parkour_level_forward", "parkour_level_back",
+    "parkour_level_jump_forward", "parkour_level_jump_back",
     "parkour_jail", "parkour_reset", "parkour_antireset",
     "parkour_slow", "parkour_blind", "parkour_jump",
     "parkour_shield", "parkour_cleanse", "parkour_checkpoint",
     "dropper_push", "dropper_level_forward", "dropper_level_back", "dropper_reset",
+    "dropper_level_jump_forward", "dropper_level_jump_back",
     "dropper_slow", "dropper_blind", "dropper_jump",
     "dropper_shield", "dropper_cleanse",
     # “Wow” events — darkness, lightning, disco in both modes

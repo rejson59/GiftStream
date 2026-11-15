@@ -193,7 +193,6 @@ async def _run_parkour_action(action: GameAction, *, allow_disabled: bool = Fals
         diagnostics.info("Anti-reset received, but no countdown was running.")
         return "There is no reset countdown to cancel."
     if action.action == "parkour_jail":
-        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player, action.params)
         previous = parkour_jail_tasks.pop(player, None)
         if previous and not previous.done():
             previous.cancel()
@@ -215,7 +214,12 @@ async def _run_parkour_action(action: GameAction, *, allow_disabled: bool = Fals
         await hub.publish_status({"parkour_result": result, "parkour_jail_seconds": jail_seconds})
         return result
     if action.action.startswith(("parkour_", "dropper_")):
-        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player, action.params)
+        params = dict(action.params)
+        if action.action.endswith(("_level_jump_forward", "_level_jump_back")):
+            # Fixed-distance jumps ("10 levels up/down") carry the distance as a param;
+            # the dashboard omits it, so the action's default of 10 levels applies.
+            params.setdefault("levels", 10)
+        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player, params)
         await hub.publish_status({"parkour_result": result})
         return result
 
@@ -365,6 +369,36 @@ def _migrate_builtin_parkour_preset() -> bool:
     return True
 
 
+LEVEL_JUMP_RULE_IDS = {"mp-jump-forward", "mp-jump-back"}
+
+
+def _add_level_jump_rules() -> list[str]:
+    """Add the "+10/-10 levels" rules to saved presets (0.25.0).
+
+    Only missing identifiers are appended, so a streamer's own rules, order and
+    prices are never rewritten by an update.
+    """
+    added: list[str] = []
+    game = get_game("minecraft-parkour")
+    saved = preset_store.get_preset(game["preset_id"]) if game else None
+    if not game or saved is None:
+        return added
+    known = {rule.id for rule in saved.rules}
+    missing = [rule for rule in game["rules"]
+               if rule["id"] in LEVEL_JUMP_RULE_IDS and rule["id"] not in known]
+    if not missing:
+        return added
+    # Place them right after the single-step rules so the panel reads naturally,
+    # without moving anything the streamer configured.
+    anchor = next((index for index, rule in enumerate(saved.rules) if rule.id == "mp-back"), None)
+    position = (anchor + 1) if anchor is not None else len(saved.rules)
+    saved.rules[position:position] = [Rule(**rule) for rule in missing]
+    preset_store.save_preset(saved)
+    added.extend(rule["id"] for rule in missing)
+    diagnostics.info("Added %d level-jump rules to preset '%s'.", len(missing), saved.name)
+    return added
+
+
 WOW_RULE_PREFIXES = ("mp-", "md-")
 WOW_RULE_IDS = {
     "mp-darkness", "mp-follow-heart", "mp-share-lightning", "mp-disco", "mp-checkpoint",
@@ -446,6 +480,7 @@ async def startup() -> None:
                                             description=game["description"], rules=game["rules"]))
     _migrate_builtin_parkour_preset()
     _add_missing_wow_rules()
+    _add_level_jump_rules()
     _retire_removed_actions()
     if config.active_preset_id not in preset_store.PRESET_IDS:
         config.active_preset_id = "minecraft-parkour"
@@ -1042,6 +1077,8 @@ async def actions() -> list[dict]:
         "parkour_push": "Parkour: Punch II arrow",
         "parkour_level_forward": "Parkour: next level",
         "parkour_level_back": "Parkour: previous level",
+        "parkour_level_jump_forward": "Parkour: +10 levels",
+        "parkour_level_jump_back": "Parkour: -10 levels",
         "parkour_checkpoint": "Parkour: back to checkpoint",
         "parkour_jail": "Parkour: jail for 20 s",
         "parkour_reset": "Parkour: reset in 60 s",
@@ -1058,6 +1095,8 @@ async def actions() -> list[dict]:
         "dropper_push": "Dropper: Punch II arrow",
         "dropper_level_forward": "Dropper: next level",
         "dropper_level_back": "Dropper: previous level",
+        "dropper_level_jump_forward": "Dropper: +10 levels",
+        "dropper_level_jump_back": "Dropper: -10 levels",
         "dropper_reset": "Dropper: back to the start",
         "dropper_slow": "Dropper: slowness · 7 s",
         "dropper_blind": "Dropper: darkness · 4 s",

@@ -38,6 +38,7 @@ The built-in **Parkour** preset maps:
 - Rose (1–29 coins) to a Punch II arrow that always hits: it starts one block in front of the player's chest, on a side that is verified to be free, and flies back into them — so it visibly flies *at* the runner and neither a wall nor a 1-block corridor can block it;
 - Donut (30–999 coins) to the next level — a teleport to that level's own checkpoint from the map data;
 - Ice Cream (30–999 coins) to the previous level checkpoint;
+- Dragon (1000+ coins) to jump **10 levels up at once** and TikTok Universe (1000+ coins) to jump **10 levels back** — one rule each, straight to the real checkpoint of the target level, clamped at level 1 and 100;
 - Castle (at least 1,000 coins) to a 60-second reset countdown;
 - Lion (at least 1,000 coins) to cancel the countdown;
 - Follow to a 20-second jail: the player is lifted into a small floating cage (iron bars with a glass floor and roof) two blocks above the ground for 20 seconds, then dropped back on the exact spot they stood on. Blocks are only placed into air (`keep`) and only the cage material is removed afterwards (`replace`), so the course is never edited and nothing can be destroyed.
