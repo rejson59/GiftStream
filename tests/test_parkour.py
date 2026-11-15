@@ -257,8 +257,11 @@ def test_start_detects_detached_server_after_giftstream_restart(monkeypatch, tmp
     monkeypatch.setattr("app.parkour_server.shutil.which", lambda _name: pytest.fail("must not launch duplicate server"))
     status = server.start()
     # Daylight is re-asserted on every successful RCON readiness probe.
+    # 26.x renamed the game rules (doDaylightCycle -> advance_time), so the
+    # daylight lock has to use the new names — the old ones are rejected there.
     assert commands == ["list", "list", "whitelist off",
-                        "gamerule doDaylightCycle false", "time set day", "weather clear"]
+                        "gamerule advance_time false", "time set day",
+                        "gamerule advance_weather false", "weather clear"]
     assert status["ready"] is True and status["players_online"] == 1
     assert status["players"] == ["Streamer"]
 
@@ -329,24 +332,60 @@ def test_non_windows_without_compatible_java_gets_actionable_setup_error(monkeyp
         parkour_server.ensure_java(21)
 
 
-def test_push_action_uses_a_strong_sudden_shove_and_validates_player(monkeypatch):
+def test_push_action_fires_an_arrow_that_flies_into_the_player(monkeypatch):
     server = ParkourServer()
     commands = []
     monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
-    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
-    monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 18000)
+    def rcon(command, **_kwargs):
+        commands.append(command)
+        # Every probe answers "the spot is free".
+        return "Streamer has the following entity data: [0.0d, 0.0d, 0.0d]" \
+            if command.startswith("execute as Streamer at @s if block") else "ok"
+    monkeypatch.setattr(server, "_rcon", rcon)
+    monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 0)
+
     message = server.execute_action("parkour_push")
     assert "Punch II" in message
-    assert len(commands) == 1
-    # The arrow starts in front of the chest and flies back into the player,
-    # so it visibly flies *at* them and a wall cannot block it.
-    assert "execute as Streamer at @s run summon minecraft:arrow ~1.0000 ~1.0 ~0.0000" in commands[0]
-    assert "positioned ^" not in commands[0] and "rotated" not in commands[0]
-    assert "Motion:[-0.4000d,0.0d,-0.0000d]" in commands[0]
-    assert '"minecraft:enchantments":{"minecraft:punch":2}' in commands[0]
-    assert "damage:0.5d,pickup:0b" in commands[0]
+    summon = [c for c in commands if "summon minecraft:arrow" in c]
+    assert len(summon) == 1
+    # The arrow starts one block in front of the chest and flies back into the hitbox,
+    # so it visibly flies *at* the player and a wall cannot block it.
+    assert "execute as Streamer at @s run summon minecraft:arrow ~1.0000 ~1.0 ~0.0000" in summon[0]
+    assert "positioned ^" not in summon[0] and "rotated" not in summon[0]
+    assert "Motion:[-0.4000d,0.0d,-0.0000d]" in summon[0]
+    assert '"minecraft:enchantments":{"minecraft:punch":2}' in summon[0]
+    assert "damage:0.5d,pickup:0b" in summon[0]
     with pytest.raises(ValueError):
         server.execute_action("parkour_push", "bad player")
+
+
+def test_punch_picks_a_direction_that_is_not_inside_a_wall(monkeypatch):
+    """A tiny stage must not swallow the arrow: the first free direction is used."""
+    server = ParkourServer()
+    summoned = []
+    monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 0)
+
+    def rcon(command, **_kwargs):
+        if "summon minecraft:arrow" in command:
+            summoned.append(command)
+            return "ok"
+        if command.startswith("execute as Streamer at @s if block"):
+            # Only the spot straight to the -z side is free (rounded to 4 decimals).
+            return "ok" if "~0.0000 ~1.0 ~-1.0000" in command else "Test failed"
+        return "ok"
+
+    monkeypatch.setattr(server, "_rcon", rcon)
+    assert server.punch_player("Streamer") == "A Punch II arrow flew at the player."
+    assert len(summoned) == 1
+    assert "minecraft:arrow ~0.0000 ~1.0 ~-1.0000" in summoned[0]
+
+
+def test_punch_reports_a_sealed_player_instead_of_firing_into_a_wall(monkeypatch):
+    server = ParkourServer()
+    monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 0)
+    monkeypatch.setattr(server, "_rcon", lambda command, **_kwargs: "Test failed")
+    with pytest.raises(RuntimeError, match="no free space"):
+        server.punch_player("Streamer")
 
 
 def test_punch_arrow_component_syntax_tracks_minecraft_release(monkeypatch):
@@ -361,27 +400,33 @@ def test_punch_arrow_component_syntax_tracks_minecraft_release(monkeypatch):
         server._punch_arrow_command("Streamer", "1.20.4")
 
 
-def test_parkour_jail_builds_a_floating_glass_cage(monkeypatch):
+def test_parkour_jail_builds_a_floating_cage_without_touching_the_map(monkeypatch):
     server = ParkourServer()
     commands = []
     monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
-    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
+    monkeypatch.setattr(server, "_rcon", lambda command, **_kwargs: commands.append(command) or "ok")
 
     monkeypatch.setattr(server, "player_position", lambda _player: (-4.5, 90.0, 2.5))
     assert server.execute_action("parkour_jail") == \
         "Player is locked in a flying glass cage for 20 seconds."
-    # The cage floats two blocks above the ground: no map block is ever replaced,
-    # so nothing can be destroyed and no scratch clone is needed.
-    assert commands[0] == "fill -6 93 1 -4 93 3 minecraft:tinted_glass"
-    assert commands[1] == "fill -6 94 1 -4 94 3 minecraft:tinted_glass hollow"
-    assert commands[2] == "fill -6 95 1 -4 95 3 minecraft:tinted_glass"
-    assert commands[3] == "tp Streamer -4.5 93.1 2.5"
+    # Floor 2 blocks above the ground the player stands on, roof 3 blocks higher.
+    assert commands[0] == "fill -6 92 1 -4 92 3 minecraft:glass keep"
+    assert commands[1] == "fill -6 95 1 -4 95 3 minecraft:glass keep"
+    # Every wall is placed with `keep`: the cage can only fill air, so no map block
+    # can be replaced or destroyed — not even a wall sitting on the cage edge.
+    walls = commands[2:6]
+    assert walls == [
+        "fill -6 93 1 -4 94 1 minecraft:iron_bars keep",
+        "fill -6 93 3 -4 94 3 minecraft:iron_bars keep",
+        "fill -6 93 1 -6 94 3 minecraft:iron_bars keep",
+        "fill -4 93 1 -4 94 3 minecraft:iron_bars keep",
+    ]
+    assert commands[6] == "tp Streamer -4.5 92.1 2.5"
     assert not any(command.startswith("clone") for command in commands)
-    assert not any("polished_deepslate" in command for command in commands)
-    assert all("1000" not in command for command in commands)
+    assert not any("hollow" in command or "polished_deepslate" in command for command in commands)
 
 
-def test_jail_release_removes_the_cage_and_drops_the_player_back(monkeypatch):
+def test_jail_release_clears_only_the_cage_material_and_drops_the_player_back(monkeypatch):
     server = ParkourServer()
     commands = []
     monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
@@ -397,9 +442,10 @@ def test_jail_release_removes_the_cage_and_drops_the_player_back(monkeypatch):
     server.execute_action("parkour_jail")
     commands.clear()
     server.release_jail("Streamer")
-    assert commands[0] == "fill -6 93 1 -4 95 3 minecraft:air"
-    # Back exactly onto the block the player was standing on.
-    assert commands[1] == "tp Streamer -4.5 91.2 2.5"
+    # `replace` with the cage materials only: a map block can never be removed.
+    assert commands[0] == "fill -6 92 1 -4 95 3 minecraft:air replace minecraft:iron_bars"
+    assert commands[1] == "fill -6 92 1 -4 95 3 minecraft:air replace minecraft:glass"
+    assert commands[2] == "tp Streamer -4.50 90.20 2.50"
     assert any("FREE!" in command for command in commands)
 
 
@@ -729,7 +775,8 @@ def test_ready_existing_server_has_whitelist_disabled_through_rcon(monkeypatch, 
     status = server.status()
     assert status["ready"] is True
     assert commands == ["list", "whitelist off",
-                        "gamerule doDaylightCycle false", "time set day", "weather clear"]
+                        "gamerule advance_time false", "time set day",
+                        "gamerule advance_weather false", "weather clear"]
     assert "white-list=false" in (tmp_path / "server.properties").read_text(encoding="utf-8")
 
 
@@ -783,7 +830,9 @@ def test_dropper_map_generation_is_bounded_and_idempotent(tmp_path, monkeypatch)
     assert "dropper_map_version" in stored and stored["dropper_map_version"] == 2
     assert stored["map_version"] == "GiftStream Dropper 100 Levels 2.0"
     server.initialize_dropper_map()
-    assert len(commands) == 911
+    # 905 fill commands + the world rules (keep_inventory, spawn_mobs, advance_time,
+    # time, advance_weather, weather, setworldspawn) run once, not twice.
+    assert len(commands) == 912
 
 
 def test_dropper_generation_backs_up_overlapping_world_regions_before_edits(tmp_path, monkeypatch):
@@ -851,14 +900,21 @@ def test_dropper_push_is_a_sudden_strong_shove(monkeypatch):
         "player": "Streamer", "game_mode": "dropper", "dropper_map_initialized": True,
         "dropper_player_levels": {"Streamer": 2},
     })
-    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
-
+    def rcon(command, **_kwargs):
+        commands.append(command)
+        # Probe answers "free" only when the command is a probe.
+        if command.startswith("execute as Streamer at @s if block"):
+            return "ok"
+        return "ok"
+    monkeypatch.setattr(server, "_rcon", rcon)
     monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 0)
+
     assert "Punch II" in server.execute_action("dropper_push")
-    assert len(commands) == 1
-    assert "execute as Streamer at @s run summon minecraft:arrow ~-1.0000 ~1.0" in commands[0]
-    assert "Motion:[0.4000d,0.0d,0.0000d]" in commands[0]
-    assert '"minecraft:enchantments":{"minecraft:punch":2}' in commands[0]
+    summon = [c for c in commands if "summon minecraft:arrow" in c]
+    assert len(summon) == 1
+    assert "execute as Streamer at @s run summon minecraft:arrow ~1.0000 ~1.0" in summon[0]
+    assert "Motion:[-0.4000d,0.0d,-0.0000d]" in summon[0]
+    assert '"minecraft:enchantments":{"minecraft:punch":2}' in summon[0]
 
 
 def test_dropper_level_actions_clamp_and_persist_stage(tmp_path, monkeypatch):
@@ -877,3 +933,62 @@ def test_dropper_level_actions_clamp_and_persist_stage(tmp_path, monkeypatch):
     assert state["dropper_player_levels"]["Streamer"] == 5
     assert "tp Streamer 68 127 4" in commands
     assert any('LEVEL 5 / 100' in command for command in commands)
+
+
+def test_daylight_lock_uses_the_gamerule_names_of_the_server_version():
+    """Java 1.21.11 renamed doDaylightCycle -> advance_time; 26.x rejects the old name."""
+    from app.parkour_server import ParkourServer as Server
+
+    assert Server.daylight_commands("26.2") == (
+        "gamerule advance_time false", "time set day",
+        "gamerule advance_weather false", "weather clear")
+    assert Server.daylight_commands("1.21.11")[0] == "gamerule advance_time false"
+    assert Server.daylight_commands("1.21.4") == (
+        "gamerule doDaylightCycle false", "time set day",
+        "gamerule doWeatherCycle false", "weather clear")
+
+
+def test_daylight_lock_falls_back_when_the_rule_name_is_rejected(monkeypatch):
+    """An unexpected server build must not leave the night running."""
+    server = ParkourServer()
+    warnings = []
+    monkeypatch.setattr(server, "settings", lambda: {"minecraft_version": "26.2"})
+    monkeypatch.setattr("app.parkour_server.diagnostics.warning",
+                        lambda message, *args: warnings.append(message % args if args else message))
+    sent = []
+
+    def rcon(command, **_kwargs):
+        sent.append(command)
+        if command.startswith("gamerule advance_"):
+            return "Unknown game rule 'advance_time'"
+        return "ok"
+
+    monkeypatch.setattr(server, "_rcon", rcon)
+    server.keep_daylight()
+    assert "gamerule doDaylightCycle false" in sent
+    assert "time set day" in sent
+
+
+def test_lobby_position_never_teleports_to_a_stale_level(monkeypatch):
+    """Standing in the lobby used to inherit a stale level score (e.g. 100)."""
+    server = ParkourServer()
+    monkeypatch.setattr(server, "player_position", lambda _player: (-74.0, 126.9, -43.0))
+    monkeypatch.setattr(server, "get_player_level", lambda _player: 100)
+    with pytest.raises(RuntimeError, match="not on a parkour stage"):
+        server.get_player_level_or_position("Streamer")
+
+
+def test_checkpoints_are_unique_and_walkable_step_by_step():
+    from app.level_checkpoints_data import CHECKPOINTS
+
+    points = [CHECKPOINTS[level][:3] for level in range(1, 101)]
+    assert len(set(points)) == 100, "two levels share the same checkpoint"
+    for level in range(1, 100):
+        a, b = CHECKPOINTS[level][:3], CHECKPOINTS[level + 1][:3]
+        distance = math.dist(a, b)
+        if level == 91:
+            # The map leaves the main course here and continues in the final
+            # gauntlet (z ≈ 290 -> z ≈ 267), so this jump is part of the map.
+            assert 150 < distance < 260
+        else:
+            assert distance < 120, (level, distance)

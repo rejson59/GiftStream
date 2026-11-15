@@ -31,12 +31,12 @@ The bundled 100 Levels map was prepared for Minecraft **26.2**. Its `training_mo
 
 The built-in **Parkour** preset maps:
 
-- Rose (1–29 coins) to a Punch II arrow that always hits: it starts one block in front of the player's chest and flies back into them, so it visibly flies *at* the runner and a wall cannot block it;
+- Rose (1–29 coins) to a Punch II arrow that always hits: it starts one block in front of the player's chest, on a side that is verified to be free, and flies back into them — so it visibly flies *at* the runner and neither a wall nor a 1-block corridor can block it;
 - Donut (30–999 coins) to the next level — a teleport to that level's own checkpoint from the map data;
 - Ice Cream (30–999 coins) to the previous level checkpoint;
 - Castle (at least 1,000 coins) to a 60-second reset countdown;
 - Lion (at least 1,000 coins) to cancel the countdown;
-- Follow to a 20-second jail: the player is lifted into a small floating glass cage two blocks above the ground for 20 seconds, then dropped back on the exact spot they stood on. The cage lives entirely in the air, so the course is never edited and nothing can be destroyed.
+- Follow to a 20-second jail: the player is lifted into a small floating cage (iron bars with a glass floor and roof) two blocks above the ground for 20 seconds, then dropped back on the exact spot they stood on. Blocks are only placed into air (`keep`) and only the cage material is removed afterwards (`replace`), so the course is never edited and nothing can be destroyed.
 
 The rule editor also offers five timed audience effects: **Slow** (slowness for 7 s), **Darkness** (4 s), **High jump** (jump boost plus slow falling), **Shield** (resistance for 6 s), and **Cleanse** (clears selected negative effects without removing other buffs). They affect only the configured local player and expire automatically. Assign any gift/event to these actions in **Parkour rules**. In the Minecraft panel, start the server, enable Parkour control, then use **Test action** to try an effect locally without waiting for a LIVE event.
 

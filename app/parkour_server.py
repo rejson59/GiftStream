@@ -77,7 +77,8 @@ _VERSION_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
 _RCON_COMMAND_ERROR = re.compile(
     r"(?i)(unknown or incomplete command|unknown command|incorrect argument|"
     r"no entity was found|no player was found|could not find (?:player|entity)|"
-    r"unknown (?:effect|scoreboard objective)|expected .{1,120} at position)"
+    r"unknown (?:effect|scoreboard objective|game ?rule)|"
+    r"expected .{1,120} at position)"
 )
 _WINDOWS_PROCESS_CACHE: tuple[float, list[dict[str, Any]]] = (0.0, [])
 _START_LOCK = threading.Lock()
@@ -1290,8 +1291,13 @@ class ParkourServer:
                     f"{x0 + hole_x + hole_size - 1} {y} {z0 + hole_z + hole_size - 1} minecraft:air")
             if stage % 10 == 0:
                 diagnostics.info("Wygenerowano szyby Droppera %s/100.", stage)
-        for command in ("gamerule keepInventory true", "gamerule doMobSpawning false",
-                        "gamerule doDaylightCycle false", "time set noon", "weather clear",
+        # Same rule rename as the daylight lock: 26.x wants snake_case names.
+        if self._rules_are_snake_case(str(state.get("minecraft_version", MAP_VERSION))):
+            keep_inventory, no_mobs = "gamerule keep_inventory true", "gamerule spawn_mobs false"
+        else:
+            keep_inventory, no_mobs = "gamerule keepInventory true", "gamerule doMobSpawning false"
+        for command in (keep_inventory, no_mobs,
+                        *self.daylight_commands(str(state.get("minecraft_version", MAP_VERSION))),
                         "setworldspawn 4 127 4"):
             build(command)
         levels = state.get("dropper_player_levels", {})
@@ -1372,9 +1378,17 @@ class ParkourServer:
         value after a teleport). The position is therefore the primary source
         and the scoreboard is only a fallback.
         """
-        detected = self.level_at_position(self.player_position(player))
+        position = self.player_position(player)
+        detected = self.level_at_position(position)
         if detected is not None:
             return detected
+        if position is not None:
+            # The position is known but it is outside every stage (lobby, spectator,
+            # below the course). The stored score is usually stale there — trusting it
+            # is what teleported players to level 100 while they stood in the lobby.
+            raise RuntimeError(
+                "The player is not on a parkour stage (lobby or off the course), so the "
+                "current level is unknown. Walk onto a checkpoint first.")
         try:
             return self.get_player_level(player)
         except (RuntimeError, ValueError):
@@ -1382,17 +1396,24 @@ class ParkourServer:
                 "Cannot tell which level the player is on — make sure they stand on the map, "
                 "not in the lobby or below the course.") from None
 
-    def _punch_arrow_command(self, player: str, minecraft_version: str = MAP_VERSION) -> str:
+    # The arrow is spawned one block away from the player and flies back through
+    # their hitbox. The spawn spot is probed with `execute if block ... #minecraft:air`
+    # first, so the arrow never starts inside a wall — that was the reason Punch II
+    # sometimes did not connect on the tight 1-block corridors of the map.
+    PUNCH_DIRECTIONS = 8
+    PUNCH_OFFSET = 1.0
+
+    def _punch_arrow_command(self, player: str, minecraft_version: str = MAP_VERSION,
+                             direction: int | None = None) -> str:
         """Shoot an arrow *into* the player, so Punch II always lands.
 
-        Version 0.21.0 spawned the arrow inside the player and let it fly away,
-        which looked like "the arrow flies from me, not at me" — and Punch II
-        knockback only applies on a real hit. Now the arrow starts one block in
-        front of the player's chest and flies back into the hitbox (0.4 blocks
-        per tick covers the gap at once). Because it starts inside the player's
-        own space, a wall behind or around them cannot block it. The knockback
-        direction comes from the arrow's flight direction, so a random angle
-        keeps the push varied.
+        The arrow starts one block in front of the player's chest and flies back
+        into their hitbox. That way it visibly flies *at* the runner (0.21.0
+        spawned it inside them, so it looked like it flew away) and Punch II
+        knockback — which only happens on a real hit — always triggers. The spawn
+        spot is outside the player's block, so a wall behind them cannot block it,
+        and :meth:`punch_player` checks the block first so the arrow never starts
+        inside a wall either.
         """
         version_match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?$", minecraft_version)
         version = tuple(map(int, version_match.groups(default="0"))) if version_match else (0, 0, 0)
@@ -1400,10 +1421,15 @@ class ParkourServer:
             raise RuntimeError("The Punch II arrow requires Minecraft 1.21 or newer. Change the server version.")
         enchantments = ('{"minecraft:punch":2}' if version >= (1, 21, 5)
                         else '{levels:{"minecraft:punch":2}}')
-        yaw = secrets.randbelow(36000) / 100 - 180
-        radians = math.radians(yaw)
-        offset_x, offset_z = math.cos(radians), math.sin(radians)
-        # Start 1 block out at chest height and fly straight back through the player.
+        if direction is None:
+            direction = secrets.randbelow(self.PUNCH_DIRECTIONS)
+        angle = math.radians(direction * (360 / self.PUNCH_DIRECTIONS)
+                             + (secrets.randbelow(3600) / 10 if direction is None else 0))
+        # `or 0.0` turns -0.0 into 0.0, so the commands read cleanly.
+        offset_x = round(math.cos(angle) * self.PUNCH_OFFSET, 4) or 0.0
+        offset_z = round(math.sin(angle) * self.PUNCH_OFFSET, 4) or 0.0
+        # The knockback direction is the arrow's flight direction: straight back
+        # through the player, with a little push so the shove is always visible.
         motion_x = -offset_x * 0.4
         motion_z = -offset_z * 0.4
         return (
@@ -1412,6 +1438,34 @@ class ParkourServer:
             f'{{Motion:[{motion_x:.4f}d,0.0d,{motion_z:.4f}d],damage:0.5d,pickup:0b,'
             f'crit:0b,weapon:{{id:"minecraft:bow",count:1,components:{{"minecraft:enchantments":{enchantments}}}}}}}'
         )
+
+    def _arrow_spot_is_free(self, player: str, direction: int) -> bool:
+        """Is the block one step out (at chest height) free for the arrow?"""
+        angle = math.radians(direction * (360 / self.PUNCH_DIRECTIONS))
+        offset_x = round(math.cos(angle) * self.PUNCH_OFFSET, 4) or 0.0
+        offset_z = round(math.sin(angle) * self.PUNCH_OFFSET, 4) or 0.0
+        # World-axis `~` offsets, exactly like the summon: mixing `^` (player-local)
+        # here would probe a different direction than the arrow is spawned in.
+        output = self._rcon(
+            f"execute as {player} at @s if block ~{offset_x:.4f} ~1.0 ~{offset_z:.4f} "
+            f"#minecraft:air run data get entity {player} Pos", log_failure=False)
+        return "failed" not in output.casefold() and bool(output)
+
+    def punch_player(self, player: str, minecraft_version: str = MAP_VERSION) -> str:
+        """Fire the Punch II arrow from the first free spot around the player."""
+        if not PLAYER_RE.fullmatch(player or ""):
+            raise ValueError("Invalid player name.")
+        start = secrets.randbelow(self.PUNCH_DIRECTIONS)
+        for step in range(self.PUNCH_DIRECTIONS):
+            direction = (start + step) % self.PUNCH_DIRECTIONS
+            if not self._arrow_spot_is_free(player, direction):
+                continue
+            self._rcon_checked(self._punch_arrow_command(player, minecraft_version, direction))
+            return "A Punch II arrow flew at the player."
+        # Every direction is solid — a fully sealed box. The arrow would start
+        # inside a block and never connect, so report it instead of pretending.
+        raise RuntimeError("There is no free space around the player for the Punch II arrow "
+                           "(the player seems to be sealed in).")
 
     @staticmethod
     def _heart_commands(player: str) -> list[str]:
@@ -1496,9 +1550,8 @@ class ParkourServer:
             levels = state.setdefault("dropper_player_levels", {})
             stage = self._dropper_lane(levels.get(player, 1))
             if action == "dropper_push":
-                self._rcon_checked(self._punch_arrow_command(
-                    player, str(state.get("minecraft_version", MAP_VERSION))))
-                return "A Punch II arrow flew at the player inside the shaft."
+                message = self.punch_player(player, str(state.get("minecraft_version", MAP_VERSION)))
+                return message + " Inside the shaft."
             if action in {"dropper_level_forward", "dropper_level_back"}:
                 stage = self._dropper_lane(stage + (1 if action.endswith("forward") else -1))
                 levels[player] = stage
@@ -1543,8 +1596,7 @@ class ParkourServer:
                 return message
             raise ValueError("Unsupported Dropper action.")
         if action == "parkour_push":
-            self._rcon_checked(self._punch_arrow_command(
-                player, str(state.get("minecraft_version", MAP_VERSION))))
+            self.punch_player(player, str(state.get("minecraft_version", MAP_VERSION)))
             diagnostics.info("Punch II arrow sent to %s.", player)
             self.keep_daylight()
             return "A Punch II arrow flew at the player."
@@ -1617,52 +1669,108 @@ class ParkourServer:
         return f"Teleported to level {level}."
 
     # -- permanent daylight --------------------------------------------------
+    @staticmethod
+    def _rules_are_snake_case(minecraft_version: str = MAP_VERSION) -> bool:
+        """Java 1.21.11 (and 26.x) moved game rules into a registry with new names."""
+        version_match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?$", minecraft_version)
+        major, minor, patch = (tuple(map(int, version_match.groups(default="0")))
+                               if version_match else (0, 0, 0))
+        return (major, minor, patch) >= (1, 21, 11) or major > 1
+
+    @staticmethod
+    def daylight_commands(minecraft_version: str = MAP_VERSION) -> tuple[str, ...]:
+        """Commands that lock the world to a bright, rain-free day.
+
+        Java 1.21.11 moved every game rule into a registry and renamed them to
+        snake_case: ``doDaylightCycle`` became ``advance_time`` (and
+        ``doWeatherCycle`` became ``advance_weather``). On those versions the old
+        names are rejected, which is why the daylight lock silently did nothing.
+        """
+        if ParkourServer._rules_are_snake_case(minecraft_version):
+            return ("gamerule advance_time false", "time set day",
+                    "gamerule advance_weather false", "weather clear")
+        return ("gamerule doDaylightCycle false", "time set day",
+                "gamerule doWeatherCycle false", "weather clear")
+
     def keep_daylight(self) -> None:
         """The stream must always look like day — no night, no weather changes."""
-        for command in ("gamerule doDaylightCycle false", "time set day", "weather clear"):
+        state = self.settings()
+        version = str(state.get("minecraft_version", MAP_VERSION))
+        commands = self.daylight_commands(version)
+        for command in commands:
             try:
-                self._rcon(command, log_failure=False)
+                result = self._rcon(command, log_failure=False)
             except Exception as exc:
                 diagnostics.warning("Could not enforce daylight: %s", exc)
                 return
+            if _RCON_COMMAND_ERROR.search(result or ""):
+                # A rule name the server does not know: retry with the other naming
+                # scheme instead of silently leaving the night running.
+                swapped = self._swap_rule_name(command)
+                if swapped is None:
+                    continue
+                try:
+                    retry = self._rcon(swapped, log_failure=False)
+                except Exception as exc:
+                    diagnostics.warning("Could not enforce daylight with %r: %s", swapped, exc)
+                    continue
+                if _RCON_COMMAND_ERROR.search(retry or ""):
+                    diagnostics.warning("The server accepted neither %r nor %r.", command, swapped)
+
+    @staticmethod
+    def _swap_rule_name(command: str) -> str | None:
+        """Map a game rule command between the pre-1.21.11 and 26.x names."""
+        pairs = (("doDaylightCycle", "advance_time"), ("doWeatherCycle", "advance_weather"),
+                 ("keepInventory", "keep_inventory"), ("doMobSpawning", "spawn_mobs"))
+        for old, new in pairs:
+            for source, target in ((old, new), (new, old)):
+                if source in command:
+                    return command.replace(source, target)
+        return None
 
     # -- jail: a temporary glass cage above the player ------------------------
     JAIL_RADIUS = 1          # 3 x 3 footprint
-    JAIL_HEIGHT = 3          # two blocks of headroom plus the roof
-    JAIL_LIFT = 2            # the cage floor floats 2 blocks above the player's feet
+    JAIL_HEIGHT = 4          # two blocks of wall plus the roof
+    JAIL_LIFT = 2            # the cage floor floats 2 blocks above the ground
+    JAIL_MATERIAL = "minecraft:iron_bars"   # see-through cage walls
+    JAIL_FLOOR = "minecraft:glass"          # floor and roof
 
     def jail_player(self, player: str, seconds: int = 20) -> str:
-        """Build a small floating glass cage above the player, for a few seconds.
+        """Build a small floating cage around the player, for a few seconds.
 
-        The cage hovers two blocks above the ground the player stands on, so the
-        course itself is never edited: there is no floor to carve out, nothing is
-        cloned to a scratch area and releasing the cage only has to clear the
-        glass it placed. The player is lifted inside and kept safe for the
-        duration; when the sentence ends they are dropped back onto the same
-        spot with the original blocks untouched.
+        The cage hovers above the ground the player stands on, so it is clear of
+        the course. Every block is placed with ``keep``, which only fills space
+        that is still air: the cage can therefore never overwrite — let alone
+        destroy — a map block, not even on a 1-block corridor where a wall sits
+        exactly on the cage edge. Releasing it only replaces the cage material
+        back with air (``replace`` filter), so the world is left untouched.
         """
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Invalid player name.")
         position = self.player_position(player)
         if not position:
             raise RuntimeError("The player is not on the server, so there is nothing to cage.")
-        # Anchor on the block under the player's feet, then float the cage above it.
         block_x, block_z = math.floor(position[0]), math.floor(position[2])
-        ground_y = math.floor(position[1])
-        if ground_y < 1:
-            ground_y = math.floor(position[1] - 0.5)
+        # The block under the feet: feet on a block boundary (y = 90.0) means the
+        # player stands on block 89, otherwise they are above block 90.
+        ground_y = math.floor(position[1]) - (0 if position[1] % 1 else 1)
         floor_y = ground_y + 1 + self.JAIL_LIFT
         x0, z0 = block_x - self.JAIL_RADIUS, block_z - self.JAIL_RADIUS
         x1, z1 = block_x + self.JAIL_RADIUS, block_z + self.JAIL_RADIUS
-        roof_y = floor_y + self.JAIL_HEIGHT - 1
+        wall_top = floor_y + self.JAIL_HEIGHT - 1
         self._cages[player] = {"x0": x0, "z0": z0, "x1": x1, "z1": z1,
-                               "y0": floor_y, "y1": roof_y,
+                               "y0": floor_y, "y1": wall_top,
                                "return": (block_x + 0.5, ground_y + 1.2, block_z + 0.5)}
+        material = self.JAIL_MATERIAL
         commands = [
-            # A hollow glass box with a glass floor and roof: four walls, no map edits below.
-            f"fill {x0} {floor_y} {z0} {x1} {floor_y} {z1} minecraft:tinted_glass",
-            f"fill {x0} {floor_y + 1} {z0} {x1} {roof_y - 1} {z1} minecraft:tinted_glass hollow",
-            f"fill {x0} {roof_y} {z0} {x1} {roof_y} {z1} minecraft:tinted_glass",
+            # Floor and roof.
+            f"fill {x0} {floor_y} {z0} {x1} {floor_y} {z1} {self.JAIL_FLOOR} keep",
+            f"fill {x0} {wall_top} {z0} {x1} {wall_top} {z1} {self.JAIL_FLOOR} keep",
+            # Four walls, each one a 3-wide, 2-high slab of bars.
+            f"fill {x0} {floor_y + 1} {z0} {x1} {wall_top - 1} {z0} {material} keep",
+            f"fill {x0} {floor_y + 1} {z1} {x1} {wall_top - 1} {z1} {material} keep",
+            f"fill {x0} {floor_y + 1} {z0} {x0} {wall_top - 1} {z1} {material} keep",
+            f"fill {x1} {floor_y + 1} {z0} {x1} {wall_top - 1} {z1} {material} keep",
             f"tp {player} {block_x + 0.5} {floor_y + 0.1} {block_z + 0.5}",
             f"effect give {player} minecraft:resistance {min(seconds + 2, 120)} 4 true",
             f"effect give {player} minecraft:slow_falling {min(seconds + 2, 120)} 0 true",
@@ -1681,13 +1789,14 @@ class ParkourServer:
             raise ValueError("Invalid player name.")
         cage = self._cages.pop(player, None)
         if cage:
-            x0, x1, z0, z1 = cage["x0"], cage["x1"], cage["z0"], cage["z1"]
-            y0, y1 = cage["y0"], cage["y1"]
+            region = (f"{cage['x0']} {cage['y0']} {cage['z0']} "
+                      f"{cage['x1']} {cage['y1']} {cage['z1']}")
             return_x, return_y, return_z = cage["return"]
             for command in (
-                # Clearing the glass is enough: the course was never touched.
-                f"fill {x0} {y0} {z0} {x1} {y1} {z1} minecraft:air",
-                f"tp {player} {return_x} {return_y} {return_z}",
+                # `replace` touches the cage material only: the map is never edited.
+                f"fill {region} minecraft:air replace {self.JAIL_MATERIAL}",
+                f"fill {region} minecraft:air replace {self.JAIL_FLOOR}",
+                f"tp {player} {return_x:.2f} {return_y:.2f} {return_z:.2f}",
                 f"effect clear {player} minecraft:resistance",
                 f"effect clear {player} minecraft:slow_falling",
                 f"title {player} actionbar "
