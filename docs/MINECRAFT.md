@@ -52,6 +52,8 @@ Five extra actions are available for both Parkour and Dropper, and the built-in 
 
 The 1,000-like rule counts likes from **all viewers at once**: enable **Licz ze wszystkich widzów** in the rule editor (field `like_global`) and the counter is shared, with the overflow kept for the next threshold. Leave it off to keep the older per-rule counter. Rule order in the editor is editable — drag the `⠿` handle or use the ↑/↓ buttons — and is stored in the preset.
 
+Rules can be reordered in the editor: drag a card by its `⠿` handle or use the ↑/↓ buttons; the order is saved in the preset and used everywhere.
+
 Rules can be edited in GiftStream. Coin thresholds use only an explicit coin price from TikTok's gift catalog. If a catalog entry exposes only `diamond_count` or has no verified coin price, the coin-based rule will not fire for that gift. TikTok gift catalog data and prices can vary by region.
 
 ## Transparent LIVE Arena overlay
