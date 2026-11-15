@@ -28,7 +28,7 @@ def publish_update(tag: str, executable: Path) -> None:
         _state.update({
             "available": True,
             "tag": tag,
-            "message": f"GiftStream {tag} pobrano. Aplikacja uruchomi się ponownie automatycznie.",
+            "message": f"GiftStream {tag} downloaded. The app will restart automatically.",
         })
 
 
@@ -45,7 +45,7 @@ def request_check() -> bool:
         _state["checking"] = True
         _state["progress"] = 0
         _state["check_id"] = int(_state["check_id"]) + 1
-        _state["last_check_message"] = "Sprawdzam dostępność aktualizacji…"
+        _state["last_check_message"] = "Checking for updates…"
         _check_requested.set()
         return True
 
@@ -63,7 +63,7 @@ def begin_check() -> None:
             _state["check_id"] = int(_state["check_id"]) + 1
         _state["checking"] = True
         _state["progress"] = 0
-        _state["last_check_message"] = "Sprawdzam dostępność aktualizacji…"
+        _state["last_check_message"] = "Checking for updates…"
 
 
 def report_progress(progress: int, message: str) -> None:

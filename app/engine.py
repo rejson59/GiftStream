@@ -1,7 +1,7 @@
-"""GiftStream — silnik reguł (preset engine).
+"""GiftStream — rule engine (preset engine).
 
-Przepływ: TikTokEvent -> dopasowanie reguł presetów -> GameAction -> gra.
-Obsługuje: cooldowny, streaki prezentów, progi lajków, paid interrupts.
+Flow: TikTokEvent -> preset rule matching -> GameAction -> game.
+Handles cooldowns, gift streaks, like thresholds and paid interrupts.
 """
 from __future__ import annotations
 
@@ -66,30 +66,30 @@ class Engine:
                     return False
                 if t.max_coins is not None and coins > t.max_coins:
                     return False
-            # Streaki: akcję odpalamy dopiero na końcu streaka (repeat_end),
-            # chyba że prezent nie jest streakowalny (repeat_count == 1).
+            # Streaks: the action fires only at the end of the streak (repeat_end),
+            # unless the gift is not streakable (repeat_count == 1).
             if not ev.repeat_end and ev.repeat_count > 1:
                 return False
             return True
         if t.type == "like":
-            return True  # progi obsługuje _like_threshold_hit
+            return True  # thresholds are handled by _like_threshold_hit
         if t.type == "comment":
             if t.keyword:
                 return t.keyword.lower() in (ev.comment or "").lower()
             return True
-        return True  # follow / join / share / subscribe — bez warunków
+        return True  # follow / join / share / subscribe — no conditions
 
     @property
     def likes_total(self) -> int:
-        """Polubienia zebrane w sesji — podstawa progów globalnych („1000 tapów”)."""
+        """Likes collected in the session — the basis for global thresholds (“1000 taps”)."""
         return self._likes_total
 
     def _like_threshold_hit(self, rule: Rule, ev: TikTokEvent) -> bool:
-        """Próg polubień: per reguła/globalnie, albo ze wszystkich widzów naraz.
+        """Like threshold: per rule/global, or across all viewers at once.
 
-        ``like_global`` liczy polubienia wszystkich widzów w sesji, więc
-        „1000 tapów” daje efekt w momencie, gdy czat nabije tysiąc — a nadwyżka
-        nie ginie: kolejne 1000 tapów odpali efekt ponownie.
+        ``like_global`` counts the likes of all viewers in the session, so
+        “1000 taps” fires the moment the chat reaches a thousand — and the
+        overflow is not lost: the next 1000 taps fire the effect again.
         """
         threshold = rule.trigger.like_threshold or 100
         if getattr(rule.trigger, "like_global", False):
@@ -106,7 +106,7 @@ class Engine:
         self._like_accum[rule.id] = acc
         return False
 
-    # -- główna metoda -------------------------------------------------------
+    # -- main method ---------------------------------------------------------
     async def handle(self, ev: TikTokEvent) -> list[GameAction]:
         self.stats["events"] += 1
         actions: list[GameAction] = []

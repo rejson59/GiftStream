@@ -1,15 +1,15 @@
-/* GiftStream — Studio dźwięków: przycinanie, fade, podgląd fali, biblioteka plików.
-   Wydzielone z app.js, bo obsługa audio ma własny stan (bufor, zaznaczenie, playery). */
+/* GiftStream — Sound studio: trimming, fade, waveform preview, file library.
+   Split out of app.js because audio handling keeps its own state (buffer, selection, players). */
 (function () {
   'use strict';
 
-  // Zgodne z serwerowym limitem (app/audio.py); różnica tylko na wypadek zmiany jednej strony.
+  // Matches the server limit (app/audio.py); the difference only guards against a one-sided change.
   const MAX_CLIP_SECONDS = 12;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
   const $id = (id) => document.getElementById(id);
 
   const trim = {
-    buffer: null,        // AudioBuffer oryginału (mp3/wav/…)
+    buffer: null,        // AudioBuffer of the original (mp3/wav/…)
     wavBlob: null,       // oryginalny plik WAV, gdy mamy go bez dekodowania
     name: '',
     duration: 0,
@@ -17,7 +17,7 @@
     end: 0,
     peaks: [],
     busy: false,
-    notice: '',      // komunikat po zapisie/błędzie — nie może zniknąć przy odświeżeniu pól
+    notice: '',      // message after save/error — must survive a field refresh
   };
 
   let audioContext = null;
@@ -36,7 +36,7 @@
 
   const fmt = (seconds) => `${clamp(seconds, 0, 86400).toFixed(2)} s`;
 
-  /* -- podgląd fali ------------------------------------------------------ */
+  /* -- waveform preview -------------------------------------------------- */
 
   function peaksFromBuffer(buffer, buckets = 180) {
     const channel = buffer.getChannelData(0);
@@ -103,8 +103,8 @@
     if (end) { end.max = trim.duration || 0; end.value = trim.end.toFixed(2); }
     const over = trim.end - trim.start > MAX_CLIP_SECONDS + 0.001;
     const summary = trim.buffer
-      ? `Fragment ${fmt(trim.start)} – ${fmt(trim.end)} (${fmt(trim.end - trim.start)}).${over ? ' Dłuższy niż 12 s — zostanie ucięty.' : ''}`
-      : 'Dźwięk czeka na wybór.';
+      ? `Fragment ${fmt(trim.start)} – ${fmt(trim.end)} (${fmt(trim.end - trim.start)}).${over ? ' Longer than 12 s — it will be cut.' : ''}`
+      : 'Waiting for a sound.';
     setStatus(trim.notice ? `${summary} ${trim.notice}` : summary);
     const apply = $id('trim-apply');
     const preview = $id('trim-preview');
@@ -114,11 +114,11 @@
     drawWave();
   }
 
-  /* -- wczytywanie dźwięku ---------------------------------------------- */
+  /* -- loading a sound --------------------------------------------------- */
 
   async function decode(arrayBuffer) {
     const ctx = context();
-    if (!ctx) throw new Error('Ta przeglądarka nie obsługuje odtwarzania i przycinania dźwięku.');
+    if (!ctx) throw new Error('This browser does not support audio playback and trimming.');
     return new Promise((resolve, reject) => {
       // Starsze Safari wymaga wersji z callbackami.
       const fallback = ctx.decodeAudioData(arrayBuffer, resolve, reject);
@@ -128,7 +128,7 @@
 
   function applyBuffer(buffer, name) {
     trim.buffer = buffer;
-    trim.name = name || 'dźwięk';
+    trim.name = name || 'sound';
     trim.duration = Math.max(0.05, buffer.duration);
     trim.start = 0;
     trim.end = Math.min(trim.duration, MAX_CLIP_SECONDS);
@@ -142,15 +142,15 @@
   async function loadBlob(blob, name) {
     trim.busy = true;
     trim.notice = '';
-    setStatus('Odczytywuję dźwięk…');
+    setStatus('Reading the sound…');
     try {
       const data = await blob.arrayBuffer();
       const buffer = await decode(data.slice(0));
       applyBuffer(buffer, name);
       trim.wavBlob = /\.wav$/i.test(name || '') || blob.type === 'audio/wav' ? blob : null;
-      setStatus(`Wczytano ${name || 'dźwięk'} — ${fmt(trim.duration)}.`);
+      setStatus(`Loaded ${name || 'sound'} — ${fmt(trim.duration)}.`);
     } catch (error) {
-      setStatus(`Nie udało się odczytać tego pliku: ${error.message || error}. Spróbuj WAV albo MP3.`);
+      setStatus(`Could not read this file: ${error.message || error}. Try WAV or MP3.`);
     } finally {
       trim.busy = false;
       syncFields();
@@ -158,18 +158,18 @@
   }
 
   async function loadUrl(url, name) {
-    setStatus('Pobieram dźwięk do przycięcia…');
+    setStatus('Downloading the sound to trim…');
     const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`Nie udało się pobrać pliku (${response.status}).`);
+    if (!response.ok) throw new Error(`Could not download the file (${response.status}).`);
     const blob = await response.blob();
-    await loadBlob(blob, name || url.split('/').pop() || 'dźwięk');
+    await loadBlob(blob, name || url.split('/').pop() || 'sound');
   }
 
   async function loadFromSelected() {
     const config = window.GiftStream?.state?.liveConfig || {};
     const url = (config.sound_url || '').trim();
     if (!url) {
-      setStatus('Najpierw wybierz dźwięk w Studio albo wgraj plik WAV powyżej.');
+      setStatus('First pick a sound in the Studio or upload a WAV file above.');
       return;
     }
     $id('trim-from-selected').disabled = true;
@@ -178,7 +178,7 @@
         await loadUrl(url, config.sound_label || url.split('/').pop());
         return;
       }
-      // Obcy serwer: przeglądarka nie odczyta bajtów (CORS), więc pobiera GiftStream.
+      // Foreign server: the browser cannot read the bytes (CORS), so GiftStream fetches them.
       const fetched = await window.GiftStream.api('/api/sounds/fetch', {
         method: 'POST',
         body: JSON.stringify({ url, name: config.sound_label || '' }),
@@ -186,7 +186,7 @@
       await loadUrl(fetched.url, fetched.name);
       setStatus(`Pobrano „${fetched.name}” (${fmt(trim.duration)}) — wybierz fragment.`);
     } catch (error) {
-      setStatus(error.message || 'Nie udało się przygotować dźwięku do przycięcia.');
+      setStatus(error.message || 'Could not prepare the sound for trimming.');
     } finally {
       $id('trim-from-selected').disabled = false;
     }
@@ -283,13 +283,13 @@
     window.addEventListener('pointercancel', stop);
   }
 
-  /* -- odsłuch i zapis --------------------------------------------------- */
+  /* -- preview and save -------------------------------------------------- */
 
   let previewSource = null;
 
   function stopPreview() {
     if (previewSource) {
-      try { previewSource.stop(); } catch { /* już zatrzymane */ }
+      try { previewSource.stop(); } catch { /* already stopped */ }
       previewSource = null;
     }
   }
@@ -379,13 +379,13 @@
     if (!trim.buffer || trim.end - trim.start < 0.05) return;
     const button = $id('trim-apply');
     button.disabled = true;
-    setStatus('Zapisuję przycięty dźwięk…');
+    setStatus('Saving the trimmed sound…');
     try {
       const rendered = renderTrimmed();
       const useServer = trim.wavBlob && trim.end - trim.start <= MAX_CLIP_SECONDS + 0.001;
       let saved;
       if (useServer) {
-        // WAV przycinamy na serwerze: dokładniejsze próbki i mniejszy plik wynikowy.
+        // WAV is trimmed on the server: more precise samples and a smaller result.
         const query = new URLSearchParams({
           start: trim.start.toFixed(3), end: trim.end.toFixed(3), filename: trim.name,
           fade_in_ms: String(clamp(Number($id('trim-fade-in')?.value) || 0, 0, 2000)),
@@ -395,28 +395,28 @@
           method: 'POST', headers: { 'Content-Type': trim.wavBlob.type || 'audio/wav' }, body: trim.wavBlob, cache: 'no-store',
         });
         saved = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(saved.detail || 'Nie udało się przyciąć pliku.');
+        if (!response.ok) throw new Error(saved.detail || 'Could not trim the file.');
       } else {
-        // MP3/M4A/OGG: przeglądarka dekoduje i wysyła gotowy WAV.
+        // MP3/M4A/OGG: the browser decodes and sends a ready WAV.
         const blob = encodeWav(rendered);
         const response = await fetch(`/api/sounds/upload?filename=${encodeURIComponent(`${trim.name.replace(/\.[^.]+$/, '')}-fragment.wav`)}`, {
           method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: blob, cache: 'no-store',
         });
         saved = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(saved.detail || 'Nie udało się zapisać przyciętego dźwięku.');
+        if (!response.ok) throw new Error(saved.detail || 'Could not save the trimmed sound.');
         saved.name = `${trim.name} · ${trim.start.toFixed(2)}–${(trim.start + (trim.end - trim.start)).toFixed(2)} s`;
       }
-      trim.notice = `✓ Zapisano ${fmt(saved.duration || (trim.end - trim.start))} i ustawiono jako alert LIVE.`;
+      trim.notice = `✓ Saved ${fmt(saved.duration || (trim.end - trim.start))} and set it as the LIVE alert.`;
       if (window.GiftStream?.selectSoundUrl) await window.GiftStream.selectSoundUrl(saved.url, saved.name);
       await refreshLibrary();
     } catch (error) {
-      trim.notice = `✗ ${error.message || 'Nie udało się zapisać przyciętego dźwięku.'}`;
+      trim.notice = `✗ ${error.message || 'Could not save the trimmed sound.'}`;
     } finally {
       syncFields();
     }
   }
 
-  /* -- biblioteka plików ------------------------------------------------- */
+  /* -- file library ------------------------------------------------------- */
 
   async function refreshLibrary() {
     const box = $id('trim-library');
@@ -425,14 +425,14 @@
       const data = await window.GiftStream.api('/api/sounds/uploads');
       const files = data.files || [];
       if (!files.length) {
-        box.innerHTML = '<div class="empty-note">Brak wgranych plików. Wgraj plik albo przytnij dźwięk — pojawi się tutaj.</div>';
+        box.innerHTML = '<div class="empty-note">No uploaded files yet. Upload a file or trim a sound — it will appear here.</div>';
         return;
       }
       box.innerHTML = files.map((file) => `<div class="trim-library-row">
         <span class="trim-library-mark">♫</span>
         <span class="trim-library-copy"><b>${window.GiftStream.esc(file.name.slice(0, 22))}</b><small>${(Number(file.size) / 1024).toFixed(0)} KB${file.duration != null ? ` · ${fmt(file.duration)}` : ''}</small></span>
-        <button type="button" class="tiny-action" data-trim-use="${window.GiftStream.esc(file.url)}">Ustaw</button>
-        <button type="button" class="tiny-action" data-trim-edit="${window.GiftStream.esc(file.url)}">Przytnij</button>
+        <button type="button" class="tiny-action" data-trim-use="${window.GiftStream.esc(file.url)}">Use</button>
+        <button type="button" class="tiny-action" data-trim-edit="${window.GiftStream.esc(file.url)}">Trim</button>
       </div>`).join('');
       box.querySelectorAll('[data-trim-use]').forEach((button) => {
         button.onclick = () => window.GiftStream.selectSoundUrl?.(button.dataset.trimUse, '');
@@ -441,7 +441,7 @@
         button.onclick = () => loadUrl(button.dataset.trimEdit, button.dataset.trimEdit.split('/').pop()).catch((error) => setStatus(error.message));
       });
     } catch (error) {
-      box.innerHTML = `<div class="empty-note">Nie udało się odczytać listy plików: ${window.GiftStream.esc(error.message)}</div>`;
+      box.innerHTML = `<div class="empty-note">Could not read the file list: ${window.GiftStream.esc(error.message)}</div>`;
     }
   }
 

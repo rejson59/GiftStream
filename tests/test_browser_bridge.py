@@ -78,7 +78,7 @@ def test_action_history_records_execution_success_skip_and_failure(monkeypatch, 
         "succeeded", "sent", "failed"
     ]
     assert hub.recent_actions[0]["execution_message"] == "Akcja potwierdzona przez RCON."
-    assert "wyłączone" in hub.recent_actions[1]["execution_message"]
+    assert "disabled" in hub.recent_actions[1]["execution_message"]
     assert "RCON odmówił" in hub.recent_actions[2]["execution_message"]
     lines = (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
     assert sum('"record_type": "action_status"' in line for line in lines) == 3

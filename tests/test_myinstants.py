@@ -64,5 +64,5 @@ def test_search_rejects_unexpected_redirect(monkeypatch):
             return "https://evil.example/"
 
     monkeypatch.setattr(myinstants.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
-    with pytest.raises(RuntimeError, match="przekierował"):
+    with pytest.raises(RuntimeError, match="redirected"):
         myinstants.search("hello")

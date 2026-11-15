@@ -16,7 +16,7 @@ _DEFAULTS: dict[str, Any] = {
     "usd_per_diamond": 0.005,
     "usd_to_pln": 4.0,
     "usd_to_pln_updated": "",
-    "rate_source": "Kurs domyślny (NBP niedostępny)",
+    "rate_source": "Default rate (NBP unavailable)",
 }
 _lock = threading.RLock()
 
@@ -62,7 +62,7 @@ def save_settings(usd_per_diamond: float, usd_to_pln: float | None = None) -> di
         old = get_settings()
         if usd_to_pln is not None:  # support older local clients without breaking settings
             old["usd_to_pln"] = usd_to_pln
-            old["rate_source"] = "Kurs ustawiony ręcznie"
+            old["rate_source"] = "Manually set rate"
         values = {**old, "usd_per_diamond": usd_per_diamond}
         _write_settings(values)
     return get_settings()
@@ -80,7 +80,7 @@ def refresh_usd_to_pln() -> dict[str, Any]:
     with _lock:
         values = {**get_settings(), "usd_to_pln": rate,
                   "usd_to_pln_updated": str(rate_entry.get("effectiveDate") or ""),
-                  "rate_source": "NBP · kurs średni USD/PLN"}
+                  "rate_source": "NBP · average USD/PLN rate"}
         _write_settings(values)
     return get_settings()
 

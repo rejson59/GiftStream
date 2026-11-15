@@ -23,7 +23,7 @@ def test_refresh_usd_pln_persists_official_nbp_rate_and_date(tmp_path, monkeypat
     settings = earnings.refresh_usd_to_pln()
     assert settings["usd_to_pln"] == 3.9876
     assert settings["usd_to_pln_updated"] == "2026-11-10"
-    assert settings["rate_source"] == "NBP · kurs średni USD/PLN"
+    assert settings["rate_source"] == "NBP · average USD/PLN rate"
 
 
 def test_estimate_uses_configurable_usd_rate_and_exchange_rate():

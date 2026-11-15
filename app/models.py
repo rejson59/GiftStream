@@ -1,9 +1,9 @@
-"""GiftStream — modele danych (Pydantic).
+"""GiftStream — data models (Pydantic).
 
-Odpowiadają strukturze StreamToEarn:
-  Preset = lista reguł (trigger -> akcja w grze)
-  Trigger = prezent / lajki / follow / słowo w komentarzu
-  Akcja   = spawn, heal, boss, ruch, teleport itd.
+They follow the StreamToEarn structure:
+  Preset  = a list of rules (trigger -> in-game action)
+  Trigger = gift / likes / follow / word in a comment
+  Action  = spawn, heal, boss, movement, teleport, etc.
 """
 from __future__ import annotations
 
@@ -19,38 +19,38 @@ TriggerType = Literal["gift", "like", "follow", "comment", "join", "share", "sub
 
 
 class Trigger(BaseModel):
-    """Co wywołuje akcję."""
+    """What triggers the action."""
     type: TriggerType = "gift"
     gift_name: Optional[str] = None          # np. "Rose", "Lion"
     gift_id: Optional[int] = None            # id prezentu z TikToka
-    min_diamonds: Optional[int] = None       # próg wartości prezentu
+    min_diamonds: Optional[int] = None       # gift value threshold
     min_coins: Optional[int] = Field(default=None, ge=0)  # verified viewer purchase price
     max_coins: Optional[int] = Field(default=None, ge=0)
     keyword: Optional[str] = None            # dla triggera "comment"
-    like_threshold: Optional[int] = None     # co ile lajków odpalić (np. co 100)
-    # True = próg liczony ze WSZYSTKICH polubień w sesji (np. „1000 tapów”),
-    # False = osobno dla każdego widza.
+    like_threshold: Optional[int] = None     # fire every N likes (e.g. every 100)
+    # True = threshold counted across ALL likes in the session (e.g. “1000 taps”),
+    # False = counted separately for every viewer.
     like_global: bool = False
 
 
 class Action(BaseModel):
-    """Co dzieje się w grze po triggerze."""
+    """What happens in the game after the trigger."""
     type: str = "spawn_zombie"               # patrz docs/BRIDGE.md
     params: dict[str, Any] = Field(default_factory=dict)
 
 
 class Rule(BaseModel):
-    """Jedna reguła presetów: IF trigger THEN akcja."""
+    """A single preset rule: IF trigger THEN action."""
     id: str
     name: str = ""
     enabled: bool = True
     trigger: Trigger = Field(default_factory=Trigger)
     action: Action = Field(default_factory=Action)
-    cooldown_sec: float = Field(default=0.0, ge=0)  # globalny odstęp między odpaleniami
-    user_cooldown_sec: float = Field(default=0.0, ge=0, le=86400)  # odstęp dla tego samego widza
+    cooldown_sec: float = Field(default=0.0, ge=0)  # global gap between firings
+    user_cooldown_sec: float = Field(default=0.0, ge=0, le=86400)  # gap for the same viewer
     interrupt: bool = False                  # czy to "paid interrupt" (nadpisuje wszystko)
     alert_text: str = ""                     # tekst alertu na overlayu
-    sound: Optional[str] = None              # nazwa dźwięku / URL
+    sound: Optional[str] = None              # sound name / URL
 
 
 class Preset(BaseModel):
@@ -90,7 +90,7 @@ class TikTokEvent(BaseModel):
 
 
 class GameAction(BaseModel):
-    """Akcja wysyłana do gry (przez WebSocket / webhook / UDP / plik)."""
+    """An action sent to the game (over WebSocket / webhook / UDP / file)."""
     action: str
     params: dict[str, Any] = Field(default_factory=dict)
     triggered_by: Optional[TikTokEvent] = None
@@ -161,38 +161,38 @@ class AppConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Przykładowe prezenty (wartości orientacyjne; prawdziwe ID/grafiki
-# dopisywane są z katalogu pokoju i eventów TikTok LIVE).
+# Sample gifts (approximate values; real IDs/artwork come from the room
+# catalog and TikTok LIVE events).
 # ---------------------------------------------------------------------------
 
 GIFT_CATALOG: list[dict[str, Any]] = [
-    # Monety to cena orientacyjna dla widza; diamenty to odrębna wartość zdarzenia.
-    # Ceny mogą się różnić regionalnie; prawdziwe ID i grafiki uzupełnia katalog TikToka.
-    {"name": "Rose", "label_pl": "Róża", "id": None, "diamonds": 1, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    # Coins are the approximate viewer price; diamonds are a separate event value.
+    # Prices may differ by region; the TikTok catalog fills in real IDs and artwork.
+    {"name": "Rose", "label_pl": "Rose", "id": None, "diamonds": 1, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "TikTok", "label_pl": "TikTok", "id": None, "diamonds": 5, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Finger Heart", "label_pl": "Serduszko z palców", "id": None, "diamonds": 5, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Finger Heart", "label_pl": "Finger Heart", "id": None, "diamonds": 5, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "Doughnut", "label_pl": "Donut", "id": None, "diamonds": 30, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "Ice Cream", "label_pl": "Lody", "id": None, "diamonds": 50, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "Panda", "label_pl": "Panda", "id": None, "diamonds": 100, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "Sunglasses", "label_pl": "Okulary", "id": None, "diamonds": 199, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "Corgi", "label_pl": "Corgi", "id": None, "diamonds": 299, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "Money Gun", "label_pl": "Pistolet na pieniądze", "id": None, "diamonds": 599, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "Money Gun", "label_pl": "Money Gun", "id": None, "diamonds": 599, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "Dragon", "label_pl": "Smok", "id": None, "diamonds": 999, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "Castle", "label_pl": "Zamek", "id": None, "diamonds": 2888, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
     {"name": "Lion", "label_pl": "Lew", "id": None, "diamonds": 29999, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
-    {"name": "TikTok Universe", "label_pl": "Wszechświat TikToka", "id": None, "diamonds": 34999, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
+    {"name": "TikTok Universe", "label_pl": "TikTok Universe", "id": None, "diamonds": 34999, "coins": 0, "coins_estimated": True, "image_url": None, "source": "sample"},
 ]
 
 # Akcje gier — dokumentacja w docs/BRIDGE.md
 KNOWN_ACTIONS: list[str] = [
     "parkour_push", "parkour_level_forward", "parkour_level_back",
     "parkour_jail", "parkour_reset", "parkour_antireset",
-    "parkour_speed", "parkour_slow", "parkour_blind", "parkour_jump",
-    "parkour_shield", "parkour_cleanse",
+    "parkour_slow", "parkour_blind", "parkour_jump",
+    "parkour_shield", "parkour_cleanse", "parkour_checkpoint",
     "dropper_push", "dropper_level_forward", "dropper_level_back", "dropper_reset",
-    "dropper_speed", "dropper_slow", "dropper_blind", "dropper_jump",
+    "dropper_slow", "dropper_blind", "dropper_jump",
     "dropper_shield", "dropper_cleanse",
-    # Eventy „wow” — ciemność, piorun, disco w obu trybach
-    "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_night", "parkour_heart",
+    # “Wow” events — darkness, lightning, disco in both modes
+    "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_heart",
     "dropper_blackout", "dropper_lightning", "dropper_disco", "dropper_heart",
 ]

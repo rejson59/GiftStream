@@ -99,7 +99,7 @@ def test_starting_the_current_release_does_not_download_it_again(tmp_path, monke
     monkeypatch.setattr(updater, "_open", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected download")))
     tag, executable, updated, message = prepare_latest("owner/repo", tmp_path)
     assert (tag, executable, updated) == ("v2.0.0", installed, False)
-    assert "najnowszą wersję" in message
+    assert "newest version" in message
 
 
 def test_executable_download_uses_verified_parallel_http_ranges(monkeypatch):

@@ -54,7 +54,8 @@ def test_blackout_is_longer_and_blinds_the_screen():
     commands = ParkourServer._blackout_commands("Streamer", 15)
     assert "effect give Streamer minecraft:darkness 15 0 true" in commands
     assert "effect give Streamer minecraft:blindness 15 0 true" in commands
-    assert "time set midnight" in commands
+    # 0.21.0: the map must always look like day — a blackout never changes the time.
+    assert "time set midnight" not in commands
     assert any(command.startswith("title Streamer actionbar") for command in commands)
 
 
@@ -73,7 +74,7 @@ def test_blackout_duration_is_clamped_and_never_negative():
 
 def test_wow_actions_are_known_by_the_api():
     expected = {
-        "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_night", "parkour_heart",
+        "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_heart",
         "dropper_blackout", "dropper_lightning", "dropper_disco", "dropper_heart",
     }
     assert expected.issubset(set(KNOWN_ACTIONS))

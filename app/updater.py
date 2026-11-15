@@ -29,7 +29,7 @@ def valid_release_tag(tag: str) -> bool:
 
 def release_api_url(repository: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
-        raise UpdateError("Niepoprawna nazwa repozytorium aktualizacji.")
+        raise UpdateError("Invalid update repository name.")
     return f"https://api.github.com/repos/{repository}/releases/latest"
 
 
@@ -45,10 +45,10 @@ def _open(url: str, timeout: int = 15) -> bytes:
     with urllib.request.urlopen(request, timeout=timeout) as response:
         length = response.headers.get("Content-Length")
         if length and int(length) > MAX_EXECUTABLE_BYTES:
-            raise UpdateError("Plik aktualizacji jest większy niż dozwolony limit.")
+            raise UpdateError("The update file is larger than the allowed limit.")
         body = response.read(MAX_EXECUTABLE_BYTES + 1)
     if len(body) > MAX_EXECUTABLE_BYTES:
-        raise UpdateError("Plik aktualizacji jest większy niż dozwolony limit.")
+        raise UpdateError("The update file is larger than the allowed limit.")
     return body
 
 
@@ -60,10 +60,10 @@ def _download_range(url: str, start: int, end: int, total: int) -> bytes:
     })
     with urllib.request.urlopen(request, timeout=25) as response:
         if getattr(response, "status", response.getcode()) != 206:
-            raise UpdateError("Serwer nie obsługuje pobierania fragmentów.")
+            raise UpdateError("The server does not support range downloads.")
         expected_range = f"bytes {start}-{end}/{total}"
         if response.headers.get("Content-Range", "").strip() != expected_range:
-            raise UpdateError("Serwer zwrócił nieprawidłowy fragment aktualizacji.")
+            raise UpdateError("The server returned an invalid update chunk.")
         chunk = response.read(end - start + 2)
     if len(chunk) != end - start + 1:
         raise UpdateError("Niekompletny fragment aktualizacji.")
@@ -83,9 +83,9 @@ def download_executable(url: str, on_progress: Callable[[int, str], None] | None
             if status == 200:  # Server ignored Range and already sent the complete executable.
                 data = response.read(MAX_EXECUTABLE_BYTES + 1)
                 if len(data) > MAX_EXECUTABLE_BYTES:
-                    raise UpdateError("Plik aktualizacji jest większy niż dozwolony limit.")
+                    raise UpdateError("The update file is larger than the allowed limit.")
                 if on_progress:
-                    on_progress(100, "Pobieranie aktualizacji zakończone.")
+                    on_progress(100, "Update download finished.")
                 return data
             content_range = response.headers.get("Content-Range", "")
             match = re.fullmatch(r"bytes 0-0/(\d+)", content_range.strip())
@@ -94,13 +94,13 @@ def download_executable(url: str, on_progress: Callable[[int, str], None] | None
                 raise ValueError("Partial download is unsupported")
             total = int(match.group(1))
             if total > MAX_EXECUTABLE_BYTES:
-                raise UpdateError("Plik aktualizacji jest większy niż dozwolony limit.")
+                raise UpdateError("The update file is larger than the allowed limit.")
     except UpdateError:
         raise
     except Exception:
         data = _open(url, timeout=45)
         if on_progress:
-            on_progress(100, "Pobieranie aktualizacji zakończone.")
+            on_progress(100, "Update download finished.")
         return data
 
     ranges = [(start, min(total - 1, start + DOWNLOAD_CHUNK_BYTES - 1))
@@ -124,16 +124,16 @@ def download_executable(url: str, on_progress: Callable[[int, str], None] | None
         # bounded streaming read rather than leave a corrupted or partial update.
         data = _open(url, timeout=45)
         if on_progress:
-            on_progress(100, "Pobieranie aktualizacji zakończone.")
+            on_progress(100, "Update download finished.")
         return data
 
     if any(piece is None for piece in pieces):
-        raise UpdateError("Nie udało się pobrać wszystkich fragmentów aktualizacji.")
+        raise UpdateError("Could not download all update chunks.")
     executable = b"".join(piece for piece in pieces if piece is not None)
     if len(executable) != total:
-        raise UpdateError("Rozmiar pobranej aktualizacji nie zgadza się z serwerem.")
+        raise UpdateError("The downloaded update size does not match the server.")
     if on_progress:
-        on_progress(100, "Pobieranie aktualizacji zakończone.")
+        on_progress(100, "Update download finished.")
     return executable
 
 
@@ -143,20 +143,20 @@ def fetch_latest_release(repository: str) -> dict[str, Any]:
     except UpdateError:
         raise
     except Exception as exc:
-        raise UpdateError(f"Nie można sprawdzić wydań GitHub: {exc}") from exc
+        raise UpdateError(f"Cannot check the GitHub releases: {exc}") from exc
 
     tag = str(release.get("tag_name", ""))
     if not valid_release_tag(tag):
-        raise UpdateError("Wydanie ma nieprawidłowy numer wersji.")
+        raise UpdateError("The release has an invalid version number.")
     assets = {str(asset.get("name")): asset for asset in release.get("assets", [])}
     executable = assets.get(APP_EXE)
     checksums = assets.get("checksums.txt")
     if not executable or not checksums:
-        raise UpdateError("Wydanie nie zawiera GiftStream.exe ani pliku sum kontrolnych.")
+        raise UpdateError("The release contains neither GiftStream.exe nor a checksum file.")
     for asset in (executable, checksums):
         url = str(asset.get("browser_download_url", ""))
         if not url.startswith("https://github.com/"):
-            raise UpdateError("Wydanie zawiera nieprawidłowy adres pobierania.")
+            raise UpdateError("The release contains an invalid download URL.")
     return {"tag": tag, "executable_url": executable["browser_download_url"],
             "checksum_url": checksums["browser_download_url"]}
 
@@ -166,7 +166,7 @@ def expected_sha256(manifest: str, filename: str = APP_EXE) -> str:
         match = re.fullmatch(r"([a-fA-F0-9]{64})\s+\*?(.+?)\s*", line)
         if match and match.group(2) == filename:
             return match.group(1).lower()
-    raise UpdateError("Nie znaleziono sumy SHA-256 dla aplikacji.")
+    raise UpdateError("No SHA-256 checksum found for the application.")
 
 
 def _write_current(data_root: Path, tag: str, destination: Path) -> None:
@@ -179,9 +179,9 @@ def _write_current(data_root: Path, tag: str, destination: Path) -> None:
 
 def _install_executable(executable: bytes, tag: str, data_root: Path) -> Path:
     if not valid_release_tag(tag):
-        raise UpdateError("Nieprawidłowy tag wydania.")
+        raise UpdateError("Invalid release tag.")
     if len(executable) < 1024 or not executable.startswith(b"MZ"):
-        raise UpdateError("Pobrany plik nie wygląda na aplikację Windows.")
+        raise UpdateError("The downloaded file does not look like a Windows application.")
 
     version_dir = data_root / "versions" / tag
     version_dir.mkdir(parents=True, exist_ok=True)
@@ -196,7 +196,7 @@ def _install_executable(executable: bytes, tag: str, data_root: Path) -> Path:
 def cache_running_executable(executable: Path, tag: str, data_root: Path) -> Path:
     """Keep the currently running single-file app available for offline startup."""
     if not valid_release_tag(tag):
-        raise UpdateError("Nieprawidłowy numer wersji aplikacji.")
+        raise UpdateError("Invalid application version number.")
     source = executable.resolve()
     destination = data_root / "versions" / tag / APP_EXE
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -239,15 +239,15 @@ def prepare_latest(
         release = fetch_latest_release(repository)
     except UpdateError as exc:
         if cached:
-            return cached[0], cached[1], False, f"Nie sprawdzono aktualizacji — uruchamiam zapisaną wersję ({exc})."
+            return cached[0], cached[1], False, f"The update check was skipped — starting the installed version ({exc})."
         raise
 
     if cached and cached[0] == release["tag"]:
-        return cached[0], cached[1], False, "Masz najnowszą wersję."
+        return cached[0], cached[1], False, "You have the newest version."
 
     try:
         if on_progress:
-            on_progress(0, "Pobieram aktualizację w kilku równoległych strumieniach…")
+            on_progress(0, "Downloading the update in several parallel streams…")
         # The small checksum and large EXE travel concurrently to save a network round trip.
         with ThreadPoolExecutor(max_workers=2) as pool:
             executable_future = pool.submit(download_executable, release["executable_url"], on_progress)
@@ -257,15 +257,15 @@ def prepare_latest(
         expected = expected_sha256(manifest)
         actual = hashlib.sha256(executable).hexdigest()
         if not hmac.compare_digest(actual, expected):
-            raise UpdateError("Suma SHA-256 aplikacji się nie zgadza — aktualizacja została odrzucona.")
+            raise UpdateError("The application SHA-256 checksum does not match — the update was rejected.")
         installed = _install_executable(executable, release["tag"], data_root)
     except UpdateError as exc:
         if cached:
-            return cached[0], cached[1], False, f"Odrzucono aktualizację — uruchamiam zapisaną wersję ({exc})."
+            return cached[0], cached[1], False, f"Update rejected — starting the installed version ({exc})."
         raise
     except Exception as exc:
         if cached:
-            return cached[0], cached[1], False, f"Aktualizacja się nie powiodła — uruchamiam zapisaną wersję ({exc})."
-        raise UpdateError(f"Nie można pobrać aplikacji: {exc}") from exc
+            return cached[0], cached[1], False, f"The update failed — starting the installed version ({exc})."
+        raise UpdateError(f"Cannot download the application: {exc}") from exc
 
     return release["tag"], installed, True, f"Pobrano GiftStream {release['tag']}."

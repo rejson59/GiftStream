@@ -1,7 +1,7 @@
-# Obsługiwany tryb gry
+# Supported game modes
 
-GiftStream udostępnia obecnie wyłącznie gotową integrację **Minecraft Parkour 100 Levels**. Inne gry i presety zostały usunięte z katalogu aplikacji.
+GiftStream currently ships exactly two integrations: **Minecraft Parkour 100 Levels** and **Minecraft Dropper 100 Levels**. Other games and presets were removed from the application catalog.
 
-GiftStream pobiera oficjalny serwer Minecraft 26.2 podczas konfiguracji, instaluje dołączony świat z datapackiem mapy i steruje akcjami przez lokalny, zabezpieczony losowym hasłem RCON. Nie instaluje pluginów, których zgodność z tą wersją serwera nie została potwierdzona.
+GiftStream downloads the official Minecraft server during setup, installs the bundled world with its map datapack and drives actions through a local RCON protected by a random password. It never installs plugins whose compatibility with that server version has not been verified.
 
-Instrukcje instalacji, EULA, wymagań Javy, cen monet i opcjonalnego przekazywania czatu opisuje [`MINECRAFT.md`](MINECRAFT.md).
+Setup, the EULA, Java requirements, coin prices and the optional chat relay are described in [`MINECRAFT.md`](MINECRAFT.md).

@@ -98,14 +98,14 @@ def _write_parkour_settings(state: dict[str, Any]) -> None:
             staged.write_text(payload, encoding="utf-8")
             os.replace(staged, snapshot)
         except OSError as exc:
-            diagnostics.warning("Nie udało się zapisać kopii ustawień świata Minecraft: %s", exc)
+            diagnostics.warning("Could not save the Minecraft world settings backup: %s", exc)
 
 
 def _map_archive() -> Path:
     for path in (bundle_root() / "assets" / MAP_FILENAME, bundle_root() / MAP_FILENAME):
         if path.is_file():
             return path
-    raise FileNotFoundError("Wbudowana mapa 100 Levels nie została znaleziona.")
+    raise FileNotFoundError("The bundled 100 Levels map could not be found.")
 
 
 def map_level_areas(archive: Path | None = None) -> dict[int, tuple[int, int, int, int, int]]:
@@ -120,7 +120,7 @@ def map_level_areas(archive: Path | None = None) -> dict[int, tuple[int, int, in
             x, z, dx, dy, dz, level = map(int, match.groups())
             result[level] = (x, z, dx, dz, dy)
     if len(result) < 90 or not {1, 50, 100}.issubset(result):
-        raise ValueError("Nie udało się odczytać zakresów poziomów z mapy parkour.")
+        raise ValueError("Could not read the level bounds from the parkour map.")
     return result
 
 
@@ -129,14 +129,45 @@ def map_level_spawn_points(areas: dict[int, tuple[int, int, int, int, int]] | No
     """Return verified, deterministic landing positions within each map stage."""
     areas = areas if areas is not None else map_level_areas()
     if set(_MAP_LEVEL_SPAWNS) != set(range(1, 101)):
-        raise ValueError("Brakuje punktu lądowania dla jednego z poziomów parkour.")
+        raise ValueError("A landing point is missing for one of the parkour levels.")
     for level, (px, py, pz) in _MAP_LEVEL_SPAWNS.items():
         if level not in areas:
-            raise ValueError(f"Mapa nie ma zakresu dla poziomu {level}.")
+            raise ValueError(f"The map has no bounds for level {level}.")
         x, z, dx, dz, dy = areas[level]
         if not (x <= px < x + dx + 1 and z <= pz < z + dz + 1 and 0 <= py <= dy + 1):
-            raise ValueError(f"Punkt lądowania poziomu {level} wypada poza jego obszarem mapy.")
+            raise ValueError(f"The landing point of level {level} falls outside its map area.")
     return dict(_MAP_LEVEL_SPAWNS)
+
+
+_CHECKPOINT_FILE = Path(__file__).with_name("level_checkpoints.json")
+_checkpoint_cache: dict[str, Any] | None = None
+
+
+def level_checkpoints() -> dict[int, tuple[float, float, float]]:
+    """Real start points of every 100 Levels level (the player's feet).
+
+    The table is generated from the map file with
+    ``tools/build_level_checkpoints.py``: first the checkpoint plate standing on
+    the level, and when there is none — the highest safe block in the level area.
+    """
+    global _checkpoint_cache
+    if _checkpoint_cache is None:
+        try:
+            data = json.loads(_CHECKPOINT_FILE.read_text(encoding="utf-8"))
+            _checkpoint_cache = {int(level): (float(spot["x"]), float(spot["y"]), float(spot["z"]))
+                                 for level, spot in data.get("levels", {}).items()}
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            diagnostics.error("Could not load the map checkpoint table: %s", exc)
+            _checkpoint_cache = {}
+    return dict(_checkpoint_cache)
+
+
+def level_checkpoint(level: int) -> tuple[float, float, float]:
+    points = level_checkpoints()
+    level = max(1, min(int(level), 100))
+    if level not in points:
+        raise RuntimeError(f"The 100 Levels map has no stored checkpoint for level {level}.")
+    return points[level]
 
 
 def _windows_java_processes() -> list[dict[str, Any]]:
@@ -290,7 +321,7 @@ def _safe_extract_java(payload: bytes, destination: Path) -> Path:
         for item in infos:
             member = PurePosixPath(item.filename.replace("\\", "/"))
             if member.is_absolute() or ".." in member.parts or not member.parts:
-                raise RuntimeError("Archiwum Java zawiera niebezpieczną ścieżkę.")
+                raise RuntimeError("The Java archive contains an unsafe path.")
             if (item.external_attr >> 16) & 0o170000 == 0o120000:
                 raise RuntimeError("Archiwum Java zawiera niedozwolony link symboliczny.")
             target = (destination / Path(*member.parts)).resolve()
@@ -301,14 +332,14 @@ def _safe_extract_java(payload: bytes, destination: Path) -> Path:
                 shutil.copyfileobj(source, output)
         java_files = list(destination.rglob("java.exe"))
         if not java_files:
-            raise RuntimeError("Pobrany pakiet Java nie zawiera java.exe.")
+            raise RuntimeError("The downloaded Java package does not contain java.exe.")
         return java_files[0]
 
 
 def _install_java(required_major: int) -> Path:
     """Install an official Adoptium JRE per-user, with no admin rights required."""
     if os.name != "nt":
-        raise RuntimeError(f"Wymagana jest Java {required_major}+. Zainstaluj ją i uruchom GiftStream ponownie.")
+        raise RuntimeError(f"Java {required_major}+ is required. Install it and start GiftStream again.")
     architecture = platform.machine().casefold()
     arch = "aarch64" if architecture in {"arm64", "aarch64"} else "x64"
     repository = f"adoptium/temurin{required_major}-binaries"
@@ -318,9 +349,9 @@ def _install_java(required_major: int) -> Path:
         with urllib.request.urlopen(request, timeout=20) as response:
             release_data = response.read(12 * 1024 * 1024 + 1)
     except Exception as exc:
-        raise RuntimeError(f"Nie udało się pobrać instalatora Java {required_major} z Adoptium: {exc}") from exc
+        raise RuntimeError(f"Could not download the Java {required_major} installer from Adoptium: {exc}") from exc
     if len(release_data) > 12 * 1024 * 1024:
-        raise RuntimeError("Odpowiedź katalogu Java przekracza dozwolony rozmiar.")
+        raise RuntimeError("The Java catalog response exceeds the allowed size.")
     release = json.loads(release_data.decode("utf-8"))
     assets = release.get("assets", [])
     wanted = re.compile(rf"^OpenJDK{required_major}U-(?:jre|jdk)_{arch}_windows_hotspot_.*\.zip$", re.IGNORECASE)
@@ -329,11 +360,11 @@ def _install_java(required_major: int) -> Path:
     if not asset:
         asset = next((item for item in assets if wanted.fullmatch(str(item.get("name", "")))), None)
     if not asset:
-        raise RuntimeError(f"Nie znaleziono oficjalnego pakietu Java {required_major} dla Windows/{arch}.")
+        raise RuntimeError(f"No official Java {required_major} package found for Windows/{arch}.")
     url = str(asset.get("browser_download_url", ""))
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or parsed.hostname != "github.com" or not parsed.path.startswith(f"/{repository}/releases/download/"):
-        raise RuntimeError("Adoptium zwrócił nieprawidłowy adres instalatora Java.")
+        raise RuntimeError("Adoptium returned an invalid Java installer URL.")
     request = urllib.request.Request(url, headers={"User-Agent": "GiftStream/1"})
     with urllib.request.urlopen(request, timeout=90) as response:
         payload = response.read(400 * 1024 * 1024 + 1)
@@ -355,9 +386,9 @@ def _install_java(required_major: int) -> Path:
                 match = re.search(r"\b([a-fA-F0-9]{64})\b", checksum_text)
                 expected_digest = match.group(1) if match else ""
     if not re.fullmatch(r"[a-fA-F0-9]{64}", expected_digest):
-        raise RuntimeError("Brak poprawnej sumy SHA-256 dla instalatora Java.")
+        raise RuntimeError("No valid SHA-256 checksum for the Java installer.")
     if hashlib.sha256(payload).hexdigest().casefold() != expected_digest.casefold():
-        raise RuntimeError("Suma SHA-256 pakietu Java jest nieprawidłowa.")
+        raise RuntimeError("The SHA-256 checksum of the Java package is invalid.")
 
     install_root = data_dir() / "runtime" / f"temurin-{required_major}"
     install_root.parent.mkdir(parents=True, exist_ok=True)
@@ -372,20 +403,20 @@ def _install_java(required_major: int) -> Path:
     executable = install_root / "bin" / "java.exe"
     if not executable.is_file() or (_java_major(executable) or 0) < required_major:
         shutil.rmtree(install_root, ignore_errors=True)
-        raise RuntimeError("Automatycznie zainstalowana Java nie spełnia wymagań Minecraft.")
+        raise RuntimeError("The automatically installed Java does not meet the Minecraft requirements.")
     return executable
 
 
 def ensure_java(required_major: int) -> tuple[Path, int]:
     found = find_java(required_major)
     if found:
-        diagnostics.info("Znaleziono kompatybilną Java %s: %s.", found[1], found[0])
+        diagnostics.info("Found a compatible Java %s: %s.", found[1], found[0])
         return found
-    diagnostics.info("Nie znaleziono Java %s+; rozpoczynam instalację runtime Adoptium.", required_major)
+    diagnostics.info("Java %s+ was not found; starting the Adoptium runtime installation.", required_major)
     executable = _install_java(required_major)
     actual_major = _java_major(executable) or 0
     if actual_major < required_major:
-        raise RuntimeError(f"Zainstalowana Java {actual_major} jest za stara; wymagane Java {required_major}+.")
+        raise RuntimeError(f"The installed Java {actual_major} is too old; Java {required_major}+ is required.")
     diagnostics.info("Zainstalowano Java %s: %s.", actual_major, executable)
     return executable, actual_major
 
@@ -402,7 +433,7 @@ def _version_manifest(force: bool = False) -> dict[str, Any]:
         raise RuntimeError("Manifest wersji Minecraft przekracza dozwolony rozmiar.")
     manifest = json.loads(raw.decode("utf-8"))
     if not isinstance(manifest, dict) or not isinstance(manifest.get("versions"), list):
-        raise RuntimeError("Mojang zwrócił nieprawidłowy manifest wersji Minecraft.")
+        raise RuntimeError("Mojang returned an invalid Minecraft version manifest.")
     _VERSION_CACHE = (now + _VERSION_CACHE_TTL, manifest)
     return manifest
 
@@ -417,7 +448,7 @@ def minecraft_versions() -> dict[str, Any]:
     ]
     latest = str(manifest.get("latest", {}).get("release", ""))
     if not any(item["id"] == latest for item in releases):
-        raise RuntimeError("Nie udało się ustalić najnowszej stabilnej wersji Minecraft.")
+        raise RuntimeError("Could not determine the newest stable Minecraft version.")
     # A manageable selector: newest 40 releases, always including the bundled-map version.
     choices = releases[:40]
     if not any(item["id"] == MAP_VERSION for item in choices):
@@ -433,11 +464,11 @@ def _resolve_release(requested_version: str = "latest") -> tuple[str, dict[str, 
     manifest = _version_manifest(force=requested_version == "latest")
     selected = str(manifest.get("latest", {}).get("release", "")) if requested_version == "latest" else requested_version
     if not _VERSION_RE.fullmatch(selected):
-        raise ValueError("Wersja Minecraft musi być stabilnym wydaniem, np. 1.21.11.")
+        raise ValueError("The Minecraft version must be a stable release, e.g. 1.21.11.")
     version = next((entry for entry in manifest["versions"]
                     if isinstance(entry, dict) and entry.get("id") == selected and entry.get("type") == "release"), None)
     if not version:
-        raise ValueError(f"Wersja Minecraft {selected} nie jest dostępna w oficjalnym katalogu wydań.")
+        raise ValueError(f"Minecraft version {selected} is not available in the official release catalog.")
     return selected, version
 
 
@@ -445,43 +476,43 @@ def _release_details(version: dict[str, Any]) -> dict[str, Any]:
     version_url = str(version.get("url", ""))
     version_host = urllib.parse.urlparse(version_url).hostname or ""
     if not version_url.startswith("https://") or not (version_host == "piston-meta.mojang.com" or version_host.endswith(".piston-meta.mojang.com")):
-        raise RuntimeError("Manifest Minecraft zwrócił nieprawidłowy adres wydania.")
+        raise RuntimeError("The Minecraft manifest returned an invalid release URL.")
     with urllib.request.urlopen(version_url, timeout=15) as response:
         info = json.loads(response.read().decode("utf-8"))
     if not isinstance(info, dict):
-        raise RuntimeError("Mojang zwrócił nieprawidłowe szczegóły wydania Minecraft.")
+        raise RuntimeError("Mojang returned invalid Minecraft release details.")
     return info
 
 
 def _download_server_jar(server_dir: Path, requested_version: str = "latest") -> tuple[Path, int, str, Path]:
     """Download a selected official release server jar and verify Mojang's SHA-1."""
     selected, version = _resolve_release(requested_version)
-    diagnostics.info("Manifest Mojang wybrał stabilne Minecraft %s; pobieram szczegóły wydania.", selected)
+    diagnostics.info("The Mojang manifest chose stable Minecraft %s; downloading the release details.", selected)
     version_info = _release_details(version)
     required_java = int(version_info.get("javaVersion", {}).get("majorVersion", 0))
     if required_java < 1:
-        raise RuntimeError(f"Nie udało się odczytać wymagań Java dla Minecraft {selected}.")
+        raise RuntimeError(f"Could not read the Java requirements for Minecraft {selected}.")
     diagnostics.info("Minecraft %s wymaga Java %s+.", selected, required_java)
     java_executable, _installed_java = ensure_java(required_java)
     server = version_info.get("downloads", {}).get("server", {})
     url = str(server.get("url", ""))
     host = urllib.parse.urlparse(url).hostname or ""
     if not url.startswith("https://") or not (host == "piston-data.mojang.com" or host.endswith(".piston-data.mojang.com")):
-        raise RuntimeError("Minecraft manifest zwrócił nieprawidłowy adres serwera.")
+        raise RuntimeError("The Minecraft manifest returned an invalid server URL.")
     request = urllib.request.Request(url, headers={"User-Agent": "GiftStream/1"})
     diagnostics.info("Pobieram plik serwera Minecraft %s z oficjalnego hosta Mojang.", selected)
     with urllib.request.urlopen(request, timeout=90) as response:
         jar = response.read(MAX_SERVER_JAR_BYTES + 1)
     if len(jar) < 1024 or len(jar) > MAX_SERVER_JAR_BYTES:
-        raise RuntimeError("Pobrany plik serwera Minecraft ma nieprawidłowy rozmiar.")
+        raise RuntimeError("The downloaded Minecraft server file has an invalid size.")
     expected_sha1 = str(server.get("sha1", "")).lower()
     if not expected_sha1 or hashlib.sha1(jar).hexdigest() != expected_sha1:
-        raise RuntimeError("Suma SHA-1 serwera Minecraft jest nieprawidłowa lub nie zgadza się.")
+        raise RuntimeError("The SHA-1 checksum of the Minecraft server is invalid or does not match.")
     destination = server_dir / "server.jar"
     temporary = destination.with_suffix(".jar.new")
     temporary.write_bytes(jar)
     os.replace(temporary, destination)
-    diagnostics.info("Serwer Minecraft %s pobrano i zweryfikowano (SHA-1), rozmiar %s bajtów.", selected, len(jar))
+    diagnostics.info("Minecraft server %s downloaded and verified (SHA-1), size %s bytes.", selected, len(jar))
     return destination, required_java, selected, java_executable
 
 
@@ -492,17 +523,17 @@ def _patch_map_datapack(world: Path) -> None:
         try:
             value = json.loads(modifier.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise ValueError(f"Nie udało się odczytać modyfikatora mapy {modifier.name}: {exc}") from exc
+            raise ValueError(f"Could not read the map modifier {modifier.name}: {exc}") from exc
         # Minecraft 26.3 expects a typed object resource. The bundled map
         # stores a one-element loot-function array with the old `function` key;
         # simply unwrapping it is insufficient (26.3 reports "No key type").
         if isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict):
             value = value[0]
         if not isinstance(value, dict):
-            raise ValueError(f"Nieznany format modyfikatora mapy {modifier.name}; nie można go bezpiecznie migrować.")
+            raise ValueError(f"Unknown map modifier format {modifier.name}; it cannot be migrated safely.")
         modifier_type = value.pop("function", value.get("type"))
         if modifier_type != "minecraft:set_components":
-            raise ValueError(f"Nieznany format modyfikatora mapy {modifier.name}; nie można go bezpiecznie migrować.")
+            raise ValueError(f"Unknown map modifier format {modifier.name}; it cannot be migrated safely.")
         value["type"] = modifier_type
         modifier.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -513,7 +544,7 @@ def _patch_map_datapack(world: Path) -> None:
     try:
         lines = timer_display.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
-        raise ValueError(f"Brakuje funkcji wyświetlania timera mapy: {exc}") from exc
+        raise ValueError(f"The map timer display function is missing: {exc}") from exc
     updated = []
     hud = [
         {"text": "LEVEL ", "color": "yellow", "bold": True},
@@ -528,16 +559,16 @@ def _patch_map_datapack(world: Path) -> None:
         try:
             components = json.loads(payload)
         except ValueError as exc:
-            raise ValueError("Nie udało się zaktualizować wyświetlania timera mapy.") from exc
+            raise ValueError("Could not update the map timer display.") from exc
         if not isinstance(components, list):
-            raise ValueError("Nieznany format wyświetlania timera mapy.")
+            raise ValueError("Unknown map timer display format.")
         if not any(isinstance(component, dict)
                    and component.get("score", {}).get("objective") == "level"
                    for component in components):
             components = hud + components
         updated.append(command + " actionbar " + json.dumps(components, ensure_ascii=False, separators=(",", ":")))
     if not any(" actionbar " in line for line in updated):
-        raise ValueError("Nie znaleziono wyświetlania actionbar timera mapy.")
+        raise ValueError("The map timer actionbar display was not found.")
     timer_display.write_text("\n".join(updated) + "\n", encoding="utf-8")
 
 
@@ -546,21 +577,21 @@ def _extract_map(archive: Path, destination: Path) -> None:
         infos = [item for item in zf.infolist() if not item.is_dir()]
         total = sum(item.file_size for item in infos)
         if total > 100 * 1024 * 1024 or len(infos) > 5000:
-            raise ValueError("Archiwum mapy przekracza dozwolony rozmiar.")
+            raise ValueError("The map archive exceeds the allowed size.")
         required = {"100 Levels/level.dat", "100 Levels/datapacks/main/pack.mcmeta"}
         if not required.issubset({item.filename for item in infos}):
-            raise ValueError("Archiwum nie zawiera poprawnej mapy Minecraft 100 Levels.")
+            raise ValueError("The archive does not contain a valid Minecraft 100 Levels map.")
         for item in infos:
             path = PurePosixPath(item.filename.replace("\\", "/"))
             if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "100 Levels":
-                raise ValueError("Archiwum mapy zawiera niebezpieczną ścieżkę.")
+                raise ValueError("The map archive contains an unsafe path.")
             # Reject Unix symlinks so extraction cannot escape the selected server folder.
             if (item.external_attr >> 16) & 0o170000 == 0o120000:
-                raise ValueError("Archiwum mapy zawiera niedozwolony link symboliczny.")
+                raise ValueError("The map archive contains a forbidden symbolic link.")
             relative = Path(*path.parts[1:])
             target = (destination / relative).resolve()
             if destination.resolve() not in target.parents:
-                raise ValueError("Ścieżka pliku mapy wychodzi poza katalog świata.")
+                raise ValueError("A map file path leaves the world directory.")
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(item) as src, target.open("wb") as out:
                 shutil.copyfileobj(src, out)
@@ -622,7 +653,7 @@ def _recv_packet(sock: socket.socket) -> tuple[int, int, str]:
     header = _recv_exact(sock, 4)
     length = struct.unpack("<i", header)[0]
     if length < 10 or length > 1_000_000:
-        raise ConnectionError("RCON zwrócił nieprawidłowy pakiet")
+        raise ConnectionError("RCON returned an invalid packet")
     payload = _recv_exact(sock, length)
     packet_id, packet_type = struct.unpack("<ii", payload[:8])
     text = payload[8:-2].decode("utf-8", errors="replace")
@@ -634,7 +665,7 @@ def _recv_exact(sock: socket.socket, count: int) -> bytes:
     while len(chunks) < count:
         part = sock.recv(count - len(chunks))
         if not part:
-            raise ConnectionError("Serwer Minecraft zamknął połączenie RCON")
+            raise ConnectionError("The Minecraft server closed the RCON connection")
         chunks.extend(part)
     return bytes(chunks)
 
@@ -652,6 +683,9 @@ class ParkourServer:
         self._rcon_retry_delay = 1.0
         self._last_status_ready: bool | None = None
         self._last_status_snapshot: dict[str, Any] | None = None
+        # Active jail cages: player -> cage position and size (for cleanup).
+        self._cages: dict[str, dict[str, int]] = {}
+        self._last_daylight_check = 0.0
         self._status_lock = threading.RLock()
         self._last_logged_exit: int | None = None
 
@@ -701,16 +735,16 @@ class ParkourServer:
         try:
             log_path.write_text("", encoding="utf-8")
         except OSError as exc:
-            diagnostics.warning("Nie udało się wyczyścić pliku logu Minecraft %s: %s", log_path, exc)
+            diagnostics.warning("Could not clear the Minecraft log file %s: %s", log_path, exc)
 
     def setup(self, server_dir: str, player: str, eula_accepted: bool, version: str = "latest",
               game_mode: str = "parkour") -> dict[str, Any]:
         if not eula_accepted:
-            raise ValueError("Zaznacz akceptację EULA Minecraft przed utworzeniem serwera.")
+            raise ValueError("Accept the Minecraft EULA before creating the server.")
         if not PLAYER_RE.fullmatch(player or ""):
-            raise ValueError("Wpisz nick Minecraft: 3–16 liter, cyfr lub podkreśleń.")
+            raise ValueError("Enter a Minecraft nickname: 3–16 letters, digits or underscores.")
         if game_mode not in {"parkour", "dropper"}:
-            raise ValueError("Nieobsługiwany tryb Minecraft.")
+            raise ValueError("Unsupported Minecraft mode.")
         selected_version, _version_info = _resolve_release(version)
         if server_dir.strip():
             root = Path(server_dir).expanduser().resolve()
@@ -718,12 +752,12 @@ class ParkourServer:
             folder = "MinecraftDropper" if game_mode == "dropper" else "MinecraftParkour"
             root = (data_dir() / folder / "servers" / selected_version).resolve()
         if root == Path(root.anchor) or root == data_dir().resolve():
-            raise ValueError("Wybierz osobny folder na lokalny serwer Minecraft.")
+            raise ValueError("Choose a separate folder for the local Minecraft server.")
         state = self.settings()
         if self._process is not None and self._process.poll() is None:
             if (state.get("server_dir") != str(root) or state.get("minecraft_version") != selected_version
                     or state.get("game_mode", "parkour") != game_mode):
-                raise RuntimeError("Zatrzymaj działający serwer przed przełączeniem trybu lub wersji Minecraft.")
+                raise RuntimeError("Stop the running server before switching the Minecraft mode or version.")
             return self.status()
         if state and (state.get("server_dir") != str(root) or state.get("minecraft_version") != selected_version
                       or state.get("game_mode", "parkour") != game_mode):
@@ -732,7 +766,7 @@ class ParkourServer:
             except Exception:
                 pass
             else:
-                raise RuntimeError("Wykryto działający serwer w tle. Zatrzymaj go przed przełączeniem wersji, aby nie utracić kontroli RCON.")
+                raise RuntimeError("A server running in the background was detected. Stop it before switching versions so you do not lose RCON control.")
         root.mkdir(parents=True, exist_ok=True)
         if (state.get("server_dir") != str(root) or state.get("minecraft_version") != selected_version
                 or state.get("game_mode", "parkour") != game_mode):
@@ -749,7 +783,7 @@ class ParkourServer:
                 _write_parkour_settings(saved_state)
                 if game_mode == "parkour":
                     _patch_map_datapack(root / "world")
-                diagnostics.info("Przywrócono zapisany serwer Minecraft %s z jego katalogu świata.", game_mode)
+                diagnostics.info("Restored the saved Minecraft %s server from its world directory.", game_mode)
                 self.start()
                 return self.status()
         if (state.get("server_dir") == str(root) and state.get("minecraft_version") == selected_version
@@ -760,12 +794,12 @@ class ParkourServer:
             self.start()
             return self.status()
         if any(root.iterdir()):
-            raise FileExistsError("Folder wybranej wersji nie jest pusty. Dane świata są chronione — wybierz inny folder lub wersję.")
+            raise FileExistsError("The selected version folder is not empty. World data is protected — choose another folder or version.")
 
         password = secrets.token_urlsafe(24)
         map_stage = root / ".giftstream-world-stage"
-        phase = "sprawdzanie mapy"
-        diagnostics.info("Rozpoczynam konfigurację Minecraft %s (%s) dla gracza %s w %s.",
+        phase = "checking the map"
+        diagnostics.info("Starting Minecraft %s (%s) setup for player %s in %s.",
                          game_mode, selected_version, player, root)
         try:
             if game_mode == "parkour":
@@ -773,19 +807,19 @@ class ParkourServer:
             phase = "pobieranie serwera i przygotowanie Java"
             diagnostics.info("Pobieram oficjalny serwer Minecraft %s i sprawdzam wymagania Java.", selected_version)
             jar, required_java, installed_version, java_executable = _download_server_jar(root, selected_version)
-            diagnostics.info("Serwer pobrany i zweryfikowany; używam Java %s (%s).", required_java, java_executable)
+            diagnostics.info("Server downloaded and verified; using Java %s (%s).", required_java, java_executable)
             if game_mode == "parkour":
-                phase = "rozpakowywanie mapy Parkour"
+                phase = "unpacking the Parkour map"
                 map_stage.mkdir()
                 _extract_map(_map_archive(), map_stage)
                 _patch_map_datapack(map_stage)
                 staged_level = map_stage / "level.dat"
                 if not staged_level.is_file():
-                    raise FileNotFoundError(f"Po rozpakowaniu mapy brakuje pliku {staged_level}.")
+                    raise FileNotFoundError(f"The file {staged_level} is missing after unpacking the map.")
                 os.replace(map_stage, root / "world")
-                diagnostics.info("Mapa 100 Levels rozpakowana i zainstalowana jako %s/world.", root)
+                diagnostics.info("The 100 Levels map is unpacked and installed as %s/world.", root)
             else:
-                diagnostics.info("Dropper Arena zostanie wygenerowana w vanilla world przez kontrolowane komendy RCON po starcie.")
+                diagnostics.info("The Dropper Arena will be generated in a vanilla world through controlled RCON commands after start.")
             phase = "zapisywanie konfiguracji serwera"
             (root / "eula.txt").write_text("# Accepted in GiftStream setup\neula=true\n", encoding="ascii")
             _write_server_properties(root / "server.properties", password)
@@ -796,9 +830,9 @@ class ParkourServer:
                      "game_mode": game_mode, "dropper_map_initialized": False,
                      "java_required": required_java, "java_executable": str(java_executable), "server_jar": str(jar)}
             _write_parkour_settings({**state, "rcon_password": password})
-            diagnostics.info("Zapisano konfigurację serwera i zgodę EULA w %s.", root)
+            diagnostics.info("Server configuration and EULA consent saved in %s.", root)
         except Exception as exc:
-            diagnostics.error("Konfiguracja Minecraft (%s) nie powiodła się podczas etapu '%s': %s",
+            diagnostics.error("Minecraft setup (%s) failed during the '%s' stage: %s",
                               game_mode, phase, exc, exc_info=exc)
             shutil.rmtree(map_stage, ignore_errors=True)
             if game_mode == "parkour":
@@ -807,10 +841,10 @@ class ParkourServer:
                 try:
                     generated.unlink(missing_ok=True)
                 except OSError as cleanup_error:
-                    diagnostics.warning("Nie udało się posprzątać pliku %s: %s", generated, cleanup_error)
+                    diagnostics.warning("Could not clean up the file %s: %s", generated, cleanup_error)
             raise
         shutil.rmtree(map_stage, ignore_errors=True)
-        diagnostics.info("Konfiguracja zakończona; uruchamiam serwer Minecraft %s.", installed_version)
+        diagnostics.info("Setup finished; starting the Minecraft server %s.", installed_version)
         self.start()
         return self.status()
 
@@ -822,11 +856,11 @@ class ParkourServer:
     def _start_once(self) -> dict[str, Any]:
         state = self.settings()
         root = Path(str(state.get("server_dir", "")))
-        diagnostics.info("Żądanie uruchomienia serwera Minecraft (wersja %s, katalog %s).",
+        diagnostics.info("Request to start the Minecraft server (version %s, directory %s).",
                          state.get("minecraft_version", "nieznana"), root)
         jar = root / "server.jar"
         if not jar.is_file() or not (root / "eula.txt").is_file():
-            raise RuntimeError("Najpierw utwórz lokalny serwer parkour.")
+            raise RuntimeError("Create the local parkour server first.")
         _disable_server_whitelist(root / "server.properties")
         if self._process is not None and self._process.poll() is None:
             return self.status()
@@ -835,7 +869,7 @@ class ParkourServer:
         # RCON instead of launching a duplicate on the same port.
         try:
             self._rcon("list", log_failure=False)
-            diagnostics.info("Wykryto już działający lokalny serwer Minecraft przez RCON; nie uruchamiam duplikatu.")
+            diagnostics.info("A running local Minecraft server was already detected via RCON; not starting a duplicate.")
             return self.status()
         except Exception:
             pass
@@ -843,8 +877,8 @@ class ParkourServer:
             try:
                 _patch_map_datapack(root / "world")
             except Exception as exc:
-                diagnostics.error("Nie udało się przygotować datapacku 100 Levels przed startem: %s", exc, exc_info=exc)
-                raise RuntimeError(f"Nie udało się przygotować mapy 100 Levels: {exc}") from exc
+                diagnostics.error("Could not prepare the 100 Levels datapack before the start: %s", exc, exc_info=exc)
+                raise RuntimeError(f"Could not prepare the 100 Levels map: {exc}") from exc
         try:
             required_java = int(state.get("java_required") or 0)
             if required_java < 1:
@@ -853,7 +887,7 @@ class ParkourServer:
                 version_details = _release_details(version_entry)
                 required_java = int(version_details.get("javaVersion", {}).get("majorVersion", 0))
                 if required_java < 1:
-                    raise RuntimeError(f"Nie udało się ustalić wymagań Java dla Minecraft {legacy_version}.")
+                    raise RuntimeError(f"Could not determine the Java requirements for Minecraft {legacy_version}.")
                 state["java_required"] = required_java
             configured_java = Path(str(state.get("java_executable", "")))
             if configured_java.is_file() and (_java_major(configured_java) or 0) >= required_java:
@@ -863,7 +897,7 @@ class ParkourServer:
                 state["java_executable"] = str(java)
                 _write_parkour_settings(state)
         except Exception as exc:
-            raise RuntimeError(f"Nie udało się przygotować Java dla serwera Minecraft: {exc}") from exc
+            raise RuntimeError(f"Could not prepare Java for the Minecraft server: {exc}") from exc
         log = (root / "giftstream-server.log").open("ab")
         kwargs: dict[str, Any] = {"cwd": str(root), "stdin": subprocess.DEVNULL,
                                   "stdout": log, "stderr": subprocess.STDOUT, "close_fds": True}
@@ -883,10 +917,10 @@ class ParkourServer:
             self._rcon_retry_delay = 1.0
             self._last_logged_exit = None
             self._last_status_ready = None
-            diagnostics.info("Proces serwera Minecraft uruchomiono (PID %s); stdout/stderr zapisuję do %s.",
+            diagnostics.info("Minecraft server process started (PID %s); stdout/stderr goes to %s.",
                              self._process.pid, root / "giftstream-server.log")
         except Exception as exc:
-            diagnostics.error("Nie udało się uruchomić procesu serwera Minecraft: %s", exc, exc_info=exc)
+            diagnostics.error("Could not start the Minecraft server process: %s", exc, exc_info=exc)
             raise
         finally:
             log.close()
@@ -898,7 +932,7 @@ class ParkourServer:
         port = int(state.get("rcon_port", 25575))
         password = str(state.get("rcon_password", ""))
         if host != "127.0.0.1" or not password or not (1 <= port <= 65535):
-            raise RuntimeError("Brak bezpiecznej konfiguracji RCON na localhost.")
+            raise RuntimeError("No secure RCON configuration on localhost.")
         command_kind = command.split(maxsplit=1)[0] if command else "<empty>"
         try:
             with socket.create_connection((host, port), timeout=3) as sock:
@@ -906,19 +940,19 @@ class ParkourServer:
                 _send_packet(sock, 1, 3, password)
                 packet_id, _packet_type, _ = _recv_packet(sock)
                 if packet_id == -1:
-                    raise PermissionError("Serwer odrzucił hasło RCON.")
+                    raise PermissionError("The server rejected the RCON password.")
                 if packet_id != 1:
                     _recv_packet(sock)
                 _send_packet(sock, 2, 2, command)
                 response_id, _response_type, text = _recv_packet(sock)
                 if response_id != 2:
-                    raise ConnectionError("Niepoprawna odpowiedź RCON.")
+                    raise ConnectionError("Invalid RCON response.")
                 return text.strip()
         except Exception as exc:
             # Log only the command verb: chat payloads, player data and secrets
             # must not leak into the copyable diagnostics.
             if log_failure:
-                diagnostics.warning("Polecenie RCON '%s' nie powiodło się: %s", command_kind, exc)
+                diagnostics.warning("The RCON command '%s' failed: %s", command_kind, exc)
             raise
 
     def _rcon_checked(self, command: str, *, log_success: bool = True) -> str:
@@ -926,10 +960,10 @@ class ParkourServer:
         result = self._rcon(command)
         if _RCON_COMMAND_ERROR.search(result):
             command_kind = command.split(maxsplit=1)[0] if command else "<empty>"
-            diagnostics.error("Minecraft odrzucił polecenie RCON '%s': %s", command_kind, result[:500])
-            raise RuntimeError(f"Minecraft odrzucił polecenie '{command_kind}': {result[:500]}")
+            diagnostics.error("Minecraft rejected the RCON command '%s': %s", command_kind, result[:500])
+            raise RuntimeError(f"Minecraft rejected the '{command_kind}' command: {result[:500]}")
         if log_success:
-            diagnostics.info("Minecraft odpowiedział na RCON '%s': %s", command.split(maxsplit=1)[0], result[:300])
+            diagnostics.info("Minecraft answered RCON '%s': %s", command.split(maxsplit=1)[0], result[:300])
         return result
 
     def status(self) -> dict[str, Any]:
@@ -948,7 +982,7 @@ class ParkourServer:
             return {"configured": False, "running": False, "ready": False,
                     "server_address": "localhost:25565", "players_online": 0, "players": [],
                     **client_info,
-                    "message": "Utwórz lokalny serwer i zaimportuj mapę 100 Levels."}
+                    "message": "Create the local server and import the 100 Levels map."}
         _disable_server_whitelist(Path(str(state.get("server_dir", ""))) / "server.properties")
         stage_map = state.get("dropper_player_levels", {})
         stage_value = stage_map.get(str(state.get("player", "")), 1) if isinstance(stage_map, dict) else 1
@@ -961,15 +995,15 @@ class ParkourServer:
                     "dropper_completed": bool(state.get("dropper_completed_players", {}).get(str(state.get("player", "")))),
                     "dropper_stage": self._dropper_lane(stage_value) if state.get("game_mode") == "dropper" else None,
                     "java_required": state.get("java_required"),
-                    "security_warning": "Tryb offline nie weryfikuje kont Microsoft. Serwer jest przeznaczony wyłącznie do połączeń lokalnych — nie wystawiaj portów 25565/25575 do Internetu.",
+                    "security_warning": "Offline mode does not verify Microsoft accounts. The server is meant for local connections only — do not expose ports 25565/25575 to the internet.",
                     "chat_relay_enabled": bool(state.get("chat_relay_enabled", False)),
                     "players_online": 0, "players": [], **client_info,
-                    "message": "Serwer startuje — pierwsze uruchomienie może potrwać chwilę."}
+                    "message": "The server is starting — the first launch may take a moment."}
         if self._process is not None and self._process.poll() is not None:
             code = int(self._process.returncode or 0)
-            response["message"] = f"Serwer zakończył pracę (kod {code}). Zajrzyj do giftstream-server.log."
+            response["message"] = f"The server exited (code {code}). Check giftstream-server.log."
             if self._last_logged_exit != code:
-                diagnostics.error("Proces serwera Minecraft zakończył pracę z kodem %s. Log JVM: %s",
+                diagnostics.error("The Minecraft server process exited with code %s. JVM log: %s",
                                   code, Path(str(state.get("server_dir", ""))) / "giftstream-server.log")
                 self._last_logged_exit = code
             self._last_status_ready = False
@@ -982,7 +1016,7 @@ class ParkourServer:
         # The vanilla server spends its first seconds loading registries/world data.
         # Do not block setup or hammer an unopened RCON socket during warm-up.
         if process_running and now - self._process_started_at < _SERVER_STARTUP_GRACE_SEC:
-            response["message"] = "Minecraft uruchamia świat i rejestry…"
+            response["message"] = "Minecraft is loading the world and registries…"
             return response
         if now < self._next_rcon_probe_at:
             # Keep the last authoritative RCON result during the short poll interval.
@@ -991,7 +1025,7 @@ class ParkourServer:
             if self._last_status_snapshot is not None:
                 return {**self._last_status_snapshot, **client_info}
             retry_in = max(1, int(self._next_rcon_probe_at - now + 0.999))
-            response["message"] = f"Minecraft jest skonfigurowany; ponowna kontrola RCON za {retry_in} s."
+            response["message"] = f"Minecraft is configured; RCON will be checked again in {retry_in} s."
             return response
         try:
             listing = self._rcon("list", log_failure=False)
@@ -1003,15 +1037,15 @@ class ParkourServer:
                 # RCON runs as console, so disable it once they become reachable.
                 try:
                     self._rcon("whitelist off", log_failure=False)
-                    diagnostics.info("Wyłączono whitelistę serwera Parkour; serwer jest lokalny i nie wymaga listy dostępu.")
+                    diagnostics.info("The Parkour server whitelist was disabled; the server is local and needs no allow list.")
                 except Exception as exc:
-                    diagnostics.warning("Nie udało się wyłączyć whitelisty przez RCON: %s", exc)
+                    diagnostics.warning("Could not disable the whitelist via RCON: %s", exc)
             player_match = re.search(r"There are (\d+) of a max of \d+ players online:(.*)", listing, re.IGNORECASE)
             players = [name.strip() for name in (player_match.group(2) if player_match else "").split(",") if name.strip()]
             response.update({"running": True, "ready": True,
                              "players_online": int(player_match.group(1)) if player_match else len(players),
                              "players": players,
-                             "message": "Minecraft gotowy · " + (listing or "RCON połączony")})
+                             "message": "Minecraft gotowy · " + (listing or "RCON connected")})
             if (state.get("game_mode") == "dropper"
                     and any(name.casefold() == str(state.get("player", "")).casefold() for name in players)):
                 player = str(state.get("player", ""))
@@ -1021,17 +1055,19 @@ class ParkourServer:
                     if position:
                         self._dropper_progress(state, player, position)
                 except Exception as exc:
-                    diagnostics.warning("Nie udało się sprawdzić lądowania Droppera: %s", exc)
+                    diagnostics.warning("Could not check the Dropper landing: %s", exc)
                 state = self.settings()
                 stage_map = state.get("dropper_player_levels", {})
                 response["dropper_stage"] = self._dropper_lane(stage_map.get(player, 1)) if isinstance(stage_map, dict) else 1
                 response["dropper_completed"] = bool(state.get("dropper_completed_players", {}).get(player))
+            self._detect_level_from_position(response)
+            self._enforce_daylight_periodically()
             self._rcon_retry_delay = 1.0
             # The dashboard polls more often than this; serve the cached ready result
             # between probes to avoid opening a fresh RCON socket on every refresh.
             self._next_rcon_probe_at = now + 4.0
             if self._last_status_ready is not True:
-                diagnostics.info("Serwer Minecraft jest gotowy i odpowiada przez RCON (%s).", state.get("server_address", "localhost:25565"))
+                diagnostics.info("The Minecraft server is ready and answers over RCON (%s).", state.get("server_address", "localhost:25565"))
             self._last_status_ready = True
             self._last_status_snapshot = dict(response)
         except Exception as exc:
@@ -1039,42 +1075,42 @@ class ParkourServer:
             self._next_rcon_probe_at = now + self._rcon_retry_delay
             retry_in = max(1, int(self._rcon_retry_delay + 0.999))
             self._rcon_retry_delay = min(8.0, self._rcon_retry_delay * 1.7)
-            response["message"] = f"Serwer działa, ale RCON nie odpowiada; ponawiam za {retry_in} s. ({exc})"
+            response["message"] = f"The server is running but RCON does not answer; retrying in {retry_in} s. ({exc})"
             if self._last_status_ready is not False:
-                diagnostics.warning("Serwer Minecraft nie jest jeszcze gotowy przez RCON: %s", exc)
+                diagnostics.warning("The Minecraft server is not ready over RCON yet: %s", exc)
             self._last_status_ready = False
             self._last_status_snapshot = dict(response)
         return response
 
     def stop(self) -> dict[str, Any]:
         if not self.settings():
-            diagnostics.warning("Poproszono o zatrzymanie Minecraft, ale serwer nie jest skonfigurowany.")
+            diagnostics.warning("A Minecraft stop was requested, but the server is not configured.")
             return self.status()
         if self._process is not None and self._process.poll() is not None:
             code = int(self._process.returncode or 0)
-            diagnostics.info("Serwer Minecraft był już zatrzymany (kod procesu %s); pomijam RCON stop.", code)
+            diagnostics.info("The Minecraft server was already stopped (process code %s); skipping the RCON stop.", code)
             self._last_status_ready = False
-            return {**self.status(), "message": f"Serwer jest już zatrzymany (kod {code}); RCON nie jest potrzebny."}
+            return {**self.status(), "message": f"The server is already stopped (code {code}); RCON is not needed."}
 
-        diagnostics.info("Wysyłam bezpieczne polecenie zatrzymania lokalnego serwera Minecraft.")
+        diagnostics.info("Sending a safe stop command to the local Minecraft server.")
         try:
             self._rcon("stop")
         except Exception as exc:
             if self._process is not None and self._process.poll() is None:
-                diagnostics.error("Nie udało się zatrzymać Minecraft przez RCON: %s", exc, exc_info=exc)
-                raise RuntimeError(f"Nie udało się zatrzymać serwera przez RCON: {exc}") from exc
+                diagnostics.error("Could not stop Minecraft via RCON: %s", exc, exc_info=exc)
+                raise RuntimeError(f"Could not stop the server via RCON: {exc}") from exc
             # After a GiftStream restart there may be no tracked Popen handle. A
             # refused connection plus a non-ready status is an idempotent stop,
             # not an API error that encourages repeated stop/start attempts.
             current = self.status()
             if not current.get("running") and not current.get("ready"):
-                diagnostics.info("RCON niedostępny, a serwer nie działa; traktuję zatrzymanie jako zakończone.")
-                return {**current, "message": "Serwer jest już zatrzymany lub nie odpowiada przez RCON."}
-            diagnostics.error("Nie udało się zatrzymać Minecraft przez RCON: %s", exc, exc_info=exc)
-            raise RuntimeError(f"Nie udało się zatrzymać serwera przez RCON: {exc}") from exc
+                diagnostics.info("RCON is unreachable and the server is not running; treating the stop as complete.")
+                return {**current, "message": "The server is already stopped or does not answer via RCON."}
+            diagnostics.error("Could not stop Minecraft via RCON: %s", exc, exc_info=exc)
+            raise RuntimeError(f"Could not stop the server via RCON: {exc}") from exc
         self._last_status_ready = False
         self._last_status_snapshot = None
-        return {**self.status(), "message": "Wysłano polecenie bezpiecznego zamknięcia serwera."}
+        return {**self.status(), "message": "A safe shutdown command was sent to the server."}
 
     def command(self, command: str) -> str:
         return self._rcon_checked(command)
@@ -1082,9 +1118,9 @@ class ParkourServer:
     def relay_chat(self, message: str) -> str:
         """Relay plain TikTok chat text to Minecraft without interpreting it as a command."""
         if not isinstance(message, str) or not message:
-            raise ValueError("Wiadomość czatu jest pusta.")
+            raise ValueError("The chat message is empty.")
         if len(message) > 2000:
-            raise ValueError("Wiadomość czatu przekracza bezpieczny limit 2000 znaków.")
+            raise ValueError("The chat message exceeds the safe limit of 2000 characters.")
         # Tellraw's JSON text component safely encodes quotes, slashes and command
         # characters as data. Preserve the message text (including punctuation and
         # Unicode) exactly; never prepend a username or pass it through RCON raw.
@@ -1133,15 +1169,15 @@ class ParkourServer:
             title = json.dumps({"text": "100 LEVELS COMPLETE!", "color": "gold", "bold": True},
                                ensure_ascii=False, separators=(",", ":"))
             self._rcon_checked(f"title {player} title {title}")
-            diagnostics.info("Gracz %s ukończył 100-poziomową mapę Dropper.", player)
-            return "Ukończono wszystkie 100 poziomów Droppera!"
+            diagnostics.info("Player %s finished the 100-level Dropper map.", player)
+            return "All 100 Dropper levels completed!"
         next_stage = stage + 1
         self._dropper_teleport(player, next_stage)
         levels[player] = next_stage
         completed.pop(player, None)
         _write_parkour_settings(state)
-        diagnostics.info("Gracz %s zaliczył poziom Droppera %s/100.", player, stage)
-        return f"Poziom {stage}/100 zaliczony — start poziomu {next_stage}/100!"
+        diagnostics.info("Player %s cleared Dropper level %s/100.", player, stage)
+        return f"Level {stage}/100 cleared — starting level {next_stage}/100!"
 
     def initialize_dropper_map(self) -> None:
         """Generate a bounded, replayable 100-stage vanilla Dropper with no third-party plugins."""
@@ -1149,7 +1185,7 @@ class ParkourServer:
         if (state.get("game_mode") != "dropper"
                 or (state.get("dropper_map_initialized") and state.get("dropper_map_version") == 2)):
             return
-        diagnostics.info("Buduję mapę vanilla Dropper 100 Levels (100 komór, 3 przeszkody każda).")
+        diagnostics.info("Building the vanilla Dropper 100 Levels map (100 cells, 3 obstacles each).")
         def build(command: str) -> str:
             return self._rcon_checked(command, log_success=False)
         # Snapshot the small set of existing world region files touched by the
@@ -1176,13 +1212,13 @@ class ParkourServer:
                         "Pre-migration backup of Minecraft world region files that overlap the generated Dropper 100 Levels arena.\n"
                         "Original world files remain in ../world; this snapshot is retained for manual recovery.\n",
                         encoding="utf-8")
-                    diagnostics.info("Zabezpieczono %s plików regionów świata przed generowaniem Droppera: %s",
+                    diagnostics.info("Backed up %s world region files before generating the Dropper: %s",
                                      len(existing_sources), backup_dir)
                 finally:
                     self._rcon_checked("save-on", log_success=False)
             except Exception as exc:
-                diagnostics.error("Nie udało się wykonać kopii regionów przed generowaniem Droppera: %s", exc)
-                raise RuntimeError("Nie udało się zabezpieczyć świata Minecraft; mapa Dropper nie została zmieniona.") from exc
+                diagnostics.error("Could not back up the regions before generating the Dropper: %s", exc)
+                raise RuntimeError("Could not protect the Minecraft world; the Dropper map was not changed.") from exc
         # Remove the former five-lane arena only in its documented bounds; preserve
         # every other part of the user's local world before replacing the minigame.
         for old_lane in range(5):
@@ -1237,206 +1273,413 @@ class ParkourServer:
             except Exception:
                 # The map is ready even if the streamer has not joined the server yet.
                 pass
-        diagnostics.info("Dropper 100 Levels v2 gotowy: 100 tras, 3 przeszkody na poziom, wodne checkpointy.")
+        diagnostics.info("Dropper 100 Levels v2 ready: 100 routes, 3 obstacles per level, water checkpoints.")
 
     def get_player_level(self, player: str) -> int:
         if not PLAYER_RE.fullmatch(player or ""):
-            raise ValueError("Niepoprawny nick gracza.")
+            raise ValueError("Invalid player name.")
         output = self._rcon_checked(f"scoreboard players get {player} level")
         match = re.search(r"has\s+(-?\d+)\s+\[level\]", output) or re.search(r"(-?\d+)", output)
         if not match:
-            raise RuntimeError(f"Nie udało się odczytać poziomu mapy: {output or 'gracz może być poza mapą'}")
+            raise RuntimeError(f"Could not read the map level: {output or 'the player may be off the map'}")
         return int(match.group(1))
 
+    def player_position(self, player: str) -> tuple[float, float, float] | None:
+        """The player's current position from RCON; ``None`` when the player is offline."""
+        if not PLAYER_RE.fullmatch(player or ""):
+            raise ValueError("Invalid player name.")
+        output = self._rcon(f"data get entity {player} Pos", log_failure=False)
+        match = re.search(r"\[(-?[\d.]+)d?,?\s+(-?[\d.]+)d?,?\s+(-?[\d.]+)d?\]", output)
+        if not match:
+            return None
+        return tuple(float(value) for value in match.groups())
+
+    def level_at_position(self, position: tuple[float, float, float] | None) -> int | None:
+        """Which level the player is standing on (from the datapack areas).
+
+        The datapack sets the ``level`` score only when the player is inside
+        their own area — in practice it is enough to check which x/z rectangle
+        the player stands in. Areas overlap on their borders, so we pick the one
+        whose centre is closest and verify that the player is vertically near
+        the level floor.
+        """
+        if not position:
+            return None
+        # The block the player stands in — map areas are given in blocks.
+        x, y, z = math.floor(position[0]), position[1], math.floor(position[2])
+        areas = map_level_areas()
+        points = level_checkpoints()
+        candidates: list[tuple[float, int]] = []
+        for level, (ax, az, dx, dz, _dy) in areas.items():
+            if not (ax <= x <= ax + dx and az <= z <= az + dz):
+                continue
+            floor = points.get(level)
+            # The level must be reachable vertically: ±6 blocks from its checkpoint floor.
+            if floor is not None and not (floor[1] - 6 <= y <= floor[1] + 6):
+                continue
+            centre_x, centre_z = ax + dx / 2, az + dz / 2
+            candidates.append((abs(x - centre_x) + abs(z - centre_z), level))
+        if not candidates:
+            return None
+        return min(candidates)[1]
+
+    def get_player_level_or_position(self, player: str) -> int:
+        """Player level: the map scoreboard first, then the real position."""
+        try:
+            return self.get_player_level(player)
+        except (RuntimeError, ValueError):
+            detected = self.level_at_position(self.player_position(player))
+            if detected is None:
+                raise RuntimeError("Cannot tell which level the player is on — make sure they are on the map.")
+            return detected
+
     def _punch_arrow_command(self, player: str, minecraft_version: str = MAP_VERSION) -> str:
-        """Fire a low-damage Punch II arrow toward the player from a random side."""
+        """Fire a Punch II arrow that actually hits — even with the player against a wall.
+
+        Earlier versions spawned the arrow six blocks *behind* the player, so a wall
+        or a narrow corridor between the spawn point and the player blocked it. The
+        arrow is now spawned right next to the player (two blocks up, one block
+        behind, along a random horizontal direction) and flies at them with a short,
+        flat trajectory. Knockback still comes from Punch II; the small motion only
+        makes sure the arrow lands on target.
+        """
         version_match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?$", minecraft_version)
         version = tuple(map(int, version_match.groups(default="0"))) if version_match else (0, 0, 0)
         if version < (1, 21, 0):
-            raise RuntimeError("Strzała Punch II wymaga Minecraft 1.21 lub nowszego. Zmień wersję serwera.")
+            raise RuntimeError("The Punch II arrow requires Minecraft 1.21 or newer. Change the server version.")
         enchantments = ('{"minecraft:punch":2}' if version >= (1, 21, 5)
                         else '{levels:{"minecraft:punch":2}}')
         yaw = secrets.randbelow(36000) / 100 - 180
         radians = math.radians(yaw)
-        speed = 1.8
-        motion_x = -math.sin(radians) * speed
-        motion_z = math.cos(radians) * speed
+        # The arrow spawns inside the player's hitbox (at chest height),
+        # so no wall or spawn protection can get in the way. The flight direction is random:
+        # it decides the Punch II knockback direction.
+        motion_x = math.cos(radians) * 0.65
+        motion_z = math.sin(radians) * 0.65
         return (
-            f'execute as {player} at @s rotated {yaw:.2f} 0 positioned ^ ^1 ^-6 '
-            f'run summon minecraft:arrow ~ ~ ~ '
-            f'{{Motion:[{motion_x:.4f}d,0.06d,{motion_z:.4f}d],damage:1.0d,pickup:0b,'
-            f'weapon:{{id:"minecraft:bow",count:1,components:{{"minecraft:enchantments":{enchantments}}}}}}}'
+            f'execute as {player} at @s run summon minecraft:arrow ~ ~1.1 ~ '
+            f'{{Motion:[{motion_x:.4f}d,0.02d,{motion_z:.4f}d],damage:0.5d,pickup:0b,'
+            f'crit:0b,weapon:{{id:"minecraft:bow",count:1,components:{{"minecraft:enchantments":{enchantments}}}}}}}'
         )
 
     @staticmethod
     def _heart_commands(player: str) -> list[str]:
-        """Follow → serduszko i owacja: cząsteczki + krótkie, bezpieczne wzmocnienie."""
+        """Follow → hearts and a short ovation (no speed: it would disturb the run)."""
         return [
             f"execute at {player} run particle minecraft:heart ~ ~2 ~ 1.2 1 1.2 0.05 40 force",
             f"execute at {player} run particle minecraft:happy_villager ~ ~2 ~ 1 1 1 0.05 30 force",
-            f"effect give {player} minecraft:speed 10 1 true",
-            f"title {player} actionbar {json.dumps({'text': 'DZIĘKUJEMY ZA OBSERWACJĘ!', 'color': 'light_purple', 'bold': True}, ensure_ascii=False, separators=(',', ':'))}",
+            f"title {player} actionbar "
+            + json.dumps({"text": "THANK YOU FOR THE FOLLOW!", "color": "light_purple", "bold": True},
+                         separators=(",", ":")),
+        ]
+
+    @staticmethod
+    def _disco_commands(player: str) -> list[str]:
+        return [
+            f"execute at {player} run particle minecraft:end_rod ~ ~2 ~ 1.5 1 1.5 0.2 120 force",
+            f"execute at {player} run particle minecraft:note ~ ~2 ~ 1 1 1 0.1 60 force",
         ]
 
     @staticmethod
     def _blackout_commands(player: str, seconds: int = 15) -> list[str]:
-        """„Ciemność, że ledwo co widać” — darkness + blindness + noc.
+        """“So dark you can barely see” — darkness + blindness, with daylight kept on.
 
-        Sam efekt darkness przygasza ekran, ale przy jasnym otoczeniu mapa dalej
-        jest czytelna. Blindness odcina widok do kilku kratek, a noc zabiera
-        światło mapy, więc efekt naprawdę robi wrażenie na transmisji.
+        Darkness alone dims the screen, but in a bright environment the map is
+        still readable. Blindness cuts the view down to a few blocks, so the
+        effect really lands on stream. The world time is never changed.
         """
         seconds = max(3, min(int(seconds), 120))
         return [
             f"effect give {player} minecraft:darkness {seconds} 0 true",
             f"effect give {player} minecraft:blindness {seconds} 0 true",
-            "time set midnight",
-            f"title {player} actionbar {json.dumps({'text': 'CIEMNOŚĆ ' + str(seconds) + ' s', 'color': 'dark_purple', 'bold': True}, ensure_ascii=False, separators=(',', ':'))}",
+            f"title {player} actionbar "
+            + json.dumps({"text": f"BLACKOUT · {seconds} s", "color": "dark_purple", "bold": True},
+                         separators=(",", ":")),
         ]
 
-    def execute_action(self, action: str, player: str | None = None) -> str:
+    def _detect_level_from_position(self, response: dict[str, Any]) -> None:
+        """Fills ``response['level']`` from the player's real position.
+
+        The map scoreboard is sometimes empty (e.g. after a teleport or when the
+        player stands between areas), so the level is also computed from the
+        position — the same method the “next/previous level” actions use.
+        """
+        player = str(response.get("player") or "")
+        if response.get("game_mode") == "dropper" or not PLAYER_RE.fullmatch(player):
+            return
+        try:
+            position = self.player_position(player)
+        except Exception as exc:
+            diagnostics.warning("Could not read the player position: %s", exc)
+            return
+        if position is None:
+            return
+        response["position"] = ["%.2f" % value for value in position]
+        detected = self.level_at_position(position)
+        if detected is not None:
+            response["level"] = detected
+        elif response.get("level") is None:
+            response["level"] = None
+
+    def _enforce_daylight_periodically(self) -> None:
+        """The map always looks like daytime — even after /time from another source."""
+        now = time.monotonic()
+        if now - self._last_daylight_check < 60:
+            return
+        self._last_daylight_check = now
+        self.keep_daylight()
+
+    def execute_action(self, action: str, player: str | None = None,
+                       params: dict[str, Any] | None = None) -> str:
         state = self.settings()
         player = player or str(state.get("player", ""))
-        diagnostics.info("Wykonuję akcję Minecraft '%s' dla gracza %s.", action, player or "nieustawiony")
+        params = params or {}
+        diagnostics.info("Running Minecraft action '%s' for player %s.", action, player or "unset")
         if not PLAYER_RE.fullmatch(player or ""):
-            raise ValueError("Najpierw ustaw nick gracza Minecraft.")
+            raise ValueError("Set the Minecraft player name first.")
         if action.startswith("dropper_"):
             if state.get("game_mode") != "dropper":
-                raise RuntimeError("Uruchom tryb Dropper, aby użyć tej akcji.")
+                raise RuntimeError("Switch to Dropper mode to use this action.")
             if not state.get("dropper_map_initialized"):
-                raise RuntimeError("Mapa Dropper nadal się przygotowuje — spróbuj za chwilę.")
+                raise RuntimeError("The Dropper map is still being prepared — try again in a moment.")
             levels = state.setdefault("dropper_player_levels", {})
             stage = self._dropper_lane(levels.get(player, 1))
             if action == "dropper_push":
                 self._rcon_checked(self._punch_arrow_command(
                     player, str(state.get("minecraft_version", MAP_VERSION))))
-                return "W szybie nadleciała z losowego kierunku strzała z odrzutem Punch II."
+                return "A Punch II arrow flew at the player inside the shaft."
             if action in {"dropper_level_forward", "dropper_level_back"}:
                 stage = self._dropper_lane(stage + (1 if action.endswith("forward") else -1))
                 levels[player] = stage
                 state.setdefault("dropper_completed_players", {}).pop(player, None)
                 self._dropper_teleport(player, stage)
                 _write_parkour_settings(state)
-                return f"Przeniesiono gracza na poziom {stage}/100."
+                return f"Moved the player to level {stage}/100."
             if action == "dropper_reset":
                 levels[player] = 1
                 state.setdefault("dropper_completed_players", {}).pop(player, None)
                 self._dropper_teleport(player, 1)
                 _write_parkour_settings(state)
-                return "Powrót na pierwszy poziom Droppera."
+                return "Back to the first Dropper level."
             effects = {
-                "dropper_speed": ([f"effect give {player} minecraft:speed 8 1 true"], "Sprint przez 8 sekund!"),
-                "dropper_slow": ([f"effect give {player} minecraft:slowness 7 1 true"], "Spowolnienie przez 7 sekund!"),
-                "dropper_blind": ([f"effect give {player} minecraft:darkness 4 0 true"], "Ciemność przez 4 sekundy!"),
-                "dropper_blackout": (self._blackout_commands(player, 15), "Ciemność: ledwo co widać przez 15 sekund!"),
-                "dropper_lightning": ([f"execute at {player} run summon minecraft:lightning_bolt ~ ~ ~"], "Piorun w gracza!"),
-                "dropper_disco": ([f"execute at {player} run particle minecraft:end_rod ~ ~2 ~ 1.5 1 1.5 0.2 120 force",
-                                   f"execute at {player} run particle minecraft:note ~ ~2 ~ 1 1 1 0.1 60 force"], "Disco!"),
-                "dropper_heart": (self._heart_commands(player), "Dziękujemy za obserwację!"),
+                "dropper_slow": ([f"effect give {player} minecraft:slowness 7 1 true"],
+                                 "Slowed down for 7 seconds!"),
+                "dropper_blind": ([f"effect give {player} minecraft:darkness 4 0 true"],
+                                  "Darkness for 4 seconds!"),
+                "dropper_blackout": (self._blackout_commands(player, 15),
+                                     "Blackout: you can barely see for 15 seconds!"),
+                "dropper_lightning": ([f"execute at {player} run summon minecraft:lightning_bolt ~ ~ ~"],
+                                      "Lightning strikes the player!"),
+                "dropper_disco": (self._disco_commands(player), "Disco!"),
+                "dropper_heart": (self._heart_commands(player), "Thanks for the follow!"),
                 "dropper_jump": ([f"effect give {player} minecraft:jump_boost 4 2 true",
-                                  f"effect give {player} minecraft:slow_falling 6 0 true"], "Wysoki skok — bezpieczne lądowanie!"),
-                "dropper_shield": ([f"effect give {player} minecraft:resistance 6 1 true"], "Tarcza odporności na 6 sekund!"),
+                                  f"effect give {player} minecraft:slow_falling 6 0 true"],
+                                 "High jump with a safe landing!"),
+                "dropper_shield": ([f"effect give {player} minecraft:resistance 6 1 true"],
+                                   "Damage shield for 6 seconds!"),
                 "dropper_cleanse": ([f"effect clear {player} minecraft:slowness",
                                      f"effect clear {player} minecraft:darkness",
                                      f"effect clear {player} minecraft:blindness",
                                      f"effect clear {player} minecraft:nausea",
-                                     f"effect clear {player} minecraft:weakness"], "Usunięto negatywne efekty!"),
+                                     f"effect clear {player} minecraft:weakness"],
+                                    "Negative effects cleared!"),
             }
             if action in effects:
                 commands, message = effects[action]
                 for command in commands:
                     self._rcon_checked(command)
+                self.keep_daylight()
                 return message
-            raise ValueError("Nieobsługiwana akcja Dropper.")
+            raise ValueError("Unsupported Dropper action.")
         if action == "parkour_push":
             self._rcon_checked(self._punch_arrow_command(
                 player, str(state.get("minecraft_version", MAP_VERSION))))
-            diagnostics.info("Akcja strzały Punch II zakończona powodzeniem dla gracza %s.", player)
-            return "W gracza nadleciała z losowego kierunku strzała z odrzutem Punch II."
+            diagnostics.info("Punch II arrow sent to %s.", player)
+            self.keep_daylight()
+            return "A Punch II arrow flew at the player."
         if action in {"parkour_level_forward", "parkour_level_back"}:
-            areas = map_level_areas()
-            spawn_points = map_level_spawn_points(areas)
-            current = self.get_player_level(player)
-            target = max(1, min(100, current + (1 if action.endswith("forward") else -1)))
-            x, y, z = spawn_points[target]
-            # The datapack's dy is a selector extent (usually 150), not a
-            # physical course height. Land directly on a map-verified platform.
-            self._rcon_checked(f"tp {player} {x:.1f} {y:.1f} {z:.1f}")
-            diagnostics.info("Przeniesiono gracza %s na bezpieczny punkt poziomu %s.", player, target)
-            return f"Przeniesiono gracza na bezpieczny punkt poziomu {target}."
+            current = self.get_player_level_or_position(player)
+            step = 1 if action.endswith("forward") else -1
+            target = max(1, min(100, current + step))
+            if target == current:
+                edge = "last" if current == 100 and step > 0 else "first"
+                return f"Player is already on the {edge} level ({current}/100)."
+            self.teleport_to_checkpoint(player, target)
+            diagnostics.info("Teleported %s to the checkpoint of level %s (was %s).", player, target, current)
+            return f"Teleported to the checkpoint of level {target}/100 ({current} → {target})."
+        if action == "parkour_checkpoint":
+            level = self.get_player_level_or_position(player)
+            self.teleport_to_checkpoint(player, level)
+            return f"Sent back to the checkpoint of level {level}/100."
         effects = {
-            "parkour_speed": ([f"effect give {player} minecraft:speed 8 1 true"], "Sprint przez 8 sekund!"),
-            "parkour_slow": ([f"effect give {player} minecraft:slowness 7 1 true"], "Spowolnienie przez 7 sekund!"),
-            "parkour_blind": ([f"effect give {player} minecraft:darkness 4 0 true"], "Ciemność przez 4 sekundy!"),
-            # Dłuższa, mocniejsza ciemność — „ledwo co widać” na czas eventu.
-            "parkour_blackout": (self._blackout_commands(player, 15), "Ciemność: ledwo co widać przez 15 sekund!"),
-            "parkour_night": (["time set midnight", "weather clear"], "Noc zapada nad mapą!"),
-            "parkour_heart": (self._heart_commands(player), "Dziękujemy za obserwację!"),
-            "parkour_lightning": ([f"execute at {player} run summon minecraft:lightning_bolt ~ ~ ~"], "Piorun w gracza!"),
-            "parkour_disco": ([f"execute at {player} run particle minecraft:end_rod ~ ~2 ~ 1.5 1 1.5 0.2 120 force",
-                               f"execute at {player} run particle minecraft:note ~ ~2 ~ 1 1 1 0.1 60 force"], "Disco!"),
+            "parkour_slow": ([f"effect give {player} minecraft:slowness 7 1 true"],
+                             "Slowed down for 7 seconds!"),
+            "parkour_blind": ([f"effect give {player} minecraft:darkness 4 0 true"],
+                              "Darkness for 4 seconds!"),
+            "parkour_blackout": (self._blackout_commands(player, 15),
+                                 "Blackout: you can barely see for 15 seconds!"),
+            "parkour_heart": (self._heart_commands(player), "Thanks for the follow!"),
+            "parkour_lightning": ([f"execute at {player} run summon minecraft:lightning_bolt ~ ~ ~"],
+                                  "Lightning strikes the player!"),
+            "parkour_disco": (self._disco_commands(player), "Disco!"),
             "parkour_jump": ([f"effect give {player} minecraft:jump_boost 4 2 true",
                               f"effect give {player} minecraft:slow_falling 6 0 true"],
-                             "Wysoki skok — bezpieczne lądowanie!"),
+                             "High jump with a safe landing!"),
             "parkour_shield": ([f"effect give {player} minecraft:resistance 6 1 true"],
-                               "Tarcza odporności na 6 sekund!"),
+                               "Damage shield for 6 seconds!"),
             "parkour_cleanse": ([f"effect clear {player} minecraft:slowness",
                                  f"effect clear {player} minecraft:darkness",
                                  f"effect clear {player} minecraft:blindness",
                                  f"effect clear {player} minecraft:nausea",
                                  f"effect clear {player} minecraft:weakness"],
-                                "Usunięto negatywne efekty!"),
+                                "Negative effects cleared!"),
         }
         if action in effects:
             commands, message = effects[action]
             for command in commands:
                 self._rcon_checked(command)
-            diagnostics.info("Zastosowano efekt Parkour '%s' dla gracza %s.", action, player)
+            diagnostics.info("Applied Parkour effect '%s' to %s.", action, player)
+            self.keep_daylight()
             return message
         if action == "parkour_jail":
-            # Prepare a clear, solid cell before moving the player so they never
-            # arrive in an unloaded/empty chunk and fall before the floor exists.
-            commands = ["fill 1001 101 1001 1001 103 1001 minecraft:air",
-                        "fill 1000 100 1000 1002 100 1002 minecraft:stone",
-                        "fill 1000 101 1000 1002 104 1002 minecraft:glass hollow",
-                        f"tp {player} 1001 101 1001",
-                        f"effect give {player} minecraft:slowness 20 255 true",
-                        f"title {player} actionbar {{\"text\":\"WIĘZIENIE · 20 s\",\"color\":\"red\"}}"]
-            for command in commands:
-                self._rcon_checked(command)
-            diagnostics.info("Gracz %s został przeniesiony do parkour-jail na 20 sekund.", player)
-            return "Gracz trafił na 20 sekund do więzienia."
+            seconds = int(params.get("seconds", 20) or 20)
+            return self.jail_player(player, seconds=seconds)
         if action in {"parkour_reset", "parkour_antireset"}:
-            raise RuntimeError("Reset z odliczaniem jest koordynowany przez GiftStream.")
-        raise ValueError("Nieobsługiwana akcja parkour.")
+            raise RuntimeError("The reset countdown is coordinated by GiftStream.")
+        raise ValueError("Unsupported parkour action.")
+
+    # -- mapa: checkpointy i poziom -----------------------------------------
+    def teleport_to_checkpoint(self, player: str, level: int) -> str:
+        """Teleport exactly onto the level's own checkpoint from the map data."""
+        if not PLAYER_RE.fullmatch(player or ""):
+            raise ValueError("Invalid player name.")
+        x, y, z = level_checkpoint(level)
+        # `spawnpoint` keeps the map's own "back to checkpoint" working after a fall.
+        self._rcon_checked(f"tp {player} {x:.2f} {y:.2f} {z:.2f}")
+        self._rcon(f"execute as {player} at @s run spawnpoint {player} ~ ~ ~", log_failure=False)
+        self._rcon_checked(
+            f"title {player} actionbar "
+            + json.dumps({"text": f"LEVEL {level}/100", "color": "gold", "bold": True},
+                         separators=(",", ":")))
+        return f"Teleported to level {level}."
+
+    # -- permanent daylight --------------------------------------------------
+    def keep_daylight(self) -> None:
+        """The stream must always look like day — no night, no weather changes."""
+        for command in ("gamerule doDaylightCycle false", "time set day", "weather clear"):
+            try:
+                self._rcon(command, log_failure=False)
+            except Exception as exc:
+                diagnostics.warning("Could not enforce daylight: %s", exc)
+                return
+
+    # -- jail: a temporary cage around the player -----------------------------
+    JAIL_RADIUS = 1
+    JAIL_HEIGHT = 3
+
+    # Scratch area above the build limit: the cage blocks are copied there first,
+    # so the map is restored block-by-block when the sentence ends.
+    JAIL_SCRATCH_Y = 250
+
+    def jail_player(self, player: str, seconds: int = 20) -> str:
+        """Build a temporary glass cage around the player, where they already stand.
+
+        The old jail teleported the player thousands of blocks away to the world
+        edge, which looked like a bug and lost their position. Now the player stays
+        exactly where they are and a small lit cage is built around them. The
+        original blocks are copied to a scratch area first, so the map is restored
+        perfectly when the sentence ends.
+        """
+        if not PLAYER_RE.fullmatch(player or ""):
+            raise ValueError("Invalid player name.")
+        position = self.player_position(player)
+        if not position:
+            raise RuntimeError("The player is not on the server, so there is nothing to cage.")
+        # The cage is anchored on the block the player is standing on.
+        x, y, z = math.floor(position[0]), math.floor(position[1]), math.floor(position[2])
+        radius, height = self.JAIL_RADIUS, self.JAIL_HEIGHT
+        x0, z0 = x - radius, z - radius
+        x1, z1 = x + radius, z + radius
+        y0, y1 = y - 1, y + height
+        scratch_y = self.JAIL_SCRATCH_Y
+        backup = False
+        try:
+            self._rcon_checked(
+                f"clone {x0} {y0} {z0} {x1} {y1} {z1} {x0} {scratch_y} {z0}", log_success=False)
+            backup = True
+        except Exception as exc:
+            # The cage still works, but the map blocks cannot be restored exactly.
+            diagnostics.warning("Could not back up the jail area through RCON: %s", exc)
+        self._cages[player] = {"x": x, "y": y, "z": z, "radius": radius, "height": height,
+                               "backup": backup}
+        commands = [
+            # Solid floor under the feet, then a hollow glass box with a roof.
+            f"fill {x0} {y - 1} {z0} {x1} {y - 1} {z1} minecraft:polished_deepslate",
+            f"fill {x0} {y} {z0} {x1} {y + height - 1} {z1} minecraft:glass hollow",
+            f"fill {x0} {y + height} {z0} {x1} {y + height} {z1} minecraft:glass",
+            f"tp {player} {x + 0.5} {y + 0.2} {z + 0.5}",
+            f"effect give {player} minecraft:resistance 5 4 true",
+            f"title {player} actionbar "
+            + json.dumps({"text": f"JAILED · {seconds} s", "color": "red", "bold": True},
+                         separators=(",", ":")),
+        ]
+        for command in commands:
+            self._rcon_checked(command, log_success=False)
+        diagnostics.info("Caged %s at %s/%s/%s for %s s.", player, x, y, z, seconds)
+        return f"Player is locked in a cage for {seconds} seconds."
+
+    def release_jail(self, player: str) -> str:
+        if not PLAYER_RE.fullmatch(player or ""):
+            raise ValueError("Invalid player name.")
+        cage = self._cages.pop(player, None)
+        if cage:
+            x, y, z = cage["x"], cage["y"], cage["z"]
+            radius, height = cage["radius"], cage["height"]
+            x0, z0 = x - radius, z - radius
+            x1, z1 = x + radius, z + radius
+            y0, y1 = y - 1, y + height
+            if cage.get("backup"):
+                # Restore the original map blocks exactly as they were.
+                restore = (f"clone {x0} {self.JAIL_SCRATCH_Y} {z0} {x1} "
+                           f"{self.JAIL_SCRATCH_Y + height + 1} {z1} {x0} {y0} {z0}")
+            else:
+                restore = f"fill {x0} {y0} {z0} {x1} {y1} {z1} minecraft:air"
+            for command in (
+                restore,
+                f"effect clear {player} minecraft:slowness",
+                f"title {player} actionbar "
+                + json.dumps({"text": "FREE!", "color": "green", "bold": True},
+                             separators=(",", ":")),
+            ):
+                try:
+                    self._rcon_checked(command, log_success=False)
+                except Exception as exc:
+                    diagnostics.warning("Could not fully release %s from the cage: %s", player, exc)
+        else:
+            self._rcon(f"effect clear {player} minecraft:slowness", log_failure=False)
+        self.keep_daylight()
+        return "Released from jail."
 
     def start_reset(self, player: str) -> str:
         if not PLAYER_RE.fullmatch(player or ""):
-            raise ValueError("Niepoprawny nick gracza.")
-        self._rcon_checked(f"title {player} title {{\"text\":\"RESET ZA 60 SEKUND\",\"color\":\"gold\"}}")
-        self._rcon_checked(f"title {player} subtitle {{\"text\":\"Wyślij prezent przypisany do Anty-resetu, aby anulować\",\"color\":\"white\"}}")
-        return "Rozpoczęto 60-sekundowe odliczanie resetu."
+            raise ValueError("Invalid player name.")
+        self._rcon_checked(f"title {player} title {{\"text\":\"RESET IN 60 SECONDS\",\"color\":\"gold\"}}")
+        self._rcon_checked(f"title {player} subtitle {{\"text\":\"Send the anti-reset gift to cancel\",\"color\":\"white\"}}")
+        return "Started the 60-second reset countdown."
 
     def update_reset_countdown(self, player: str, remaining: int) -> None:
         if not PLAYER_RE.fullmatch(player or ""):
-            raise ValueError("Niepoprawny nick gracza.")
+            raise ValueError("Invalid player name.")
         remaining = max(0, min(60, int(remaining)))
-        self._rcon_checked(f"title {player} actionbar {{\"text\":\"RESET ZA {remaining} s · podaruj Anty-reset, aby anulować\",\"color\":\"gold\"}}")
+        self._rcon_checked(f"title {player} actionbar {{\"text\":\"RESET IN {remaining} s · send anti-reset to cancel\",\"color\":\"gold\"}}")
 
     def finish_reset(self, player: str) -> str:
         return self._rcon_checked(f"execute as {player} run trigger restart set 1")
 
     def cancel_reset(self, player: str) -> str:
         if not PLAYER_RE.fullmatch(player or ""):
-            raise ValueError("Niepoprawny nick gracza.")
+            raise ValueError("Invalid player name.")
         self._rcon_checked(f"title {player} clear")
-        self._rcon_checked(f"title {player} actionbar {{\"text\":\"RESET ANULOWANY\",\"color\":\"green\"}}")
-        return "Reset anulowany przez anty-reset."
+        self._rcon_checked(f"title {player} actionbar {{\"text\":\"RESET CANCELLED\",\"color\":\"green\"}}")
+        return "Reset cancelled by the anti-reset gift."
 
-    def release_jail(self, player: str) -> str:
-        if not PLAYER_RE.fullmatch(player or ""):
-            raise ValueError("Niepoprawny nick gracza.")
-        self._rcon_checked(f"effect clear {player} minecraft:slowness")
-        # Use the map datapack's configured join/back-to-lobby spawn, not the
-        # old hard-coded point inside the first level structure.
-        return self._rcon_checked(f"tp {player} -74 126.9375 -43")

@@ -112,10 +112,10 @@ def search(query: str, limit: int = 20) -> list[dict[str, str]]:
     with urllib.request.urlopen(request, timeout=12) as response:
         final_url = urllib.parse.urlparse(response.geturl())
         if final_url.scheme != "https" or final_url.hostname not in {"myinstants.com", "www.myinstants.com"}:
-            raise RuntimeError("MyInstants przekierował na nieoczekiwany adres.")
+            raise RuntimeError("MyInstants redirected to an unexpected address.")
         page = response.read(MAX_PAGE_BYTES + 1)
     if len(page) > MAX_PAGE_BYTES:
-        raise RuntimeError("Wyniki MyInstants przekraczają dozwolony rozmiar.")
+        raise RuntimeError("The MyInstants results exceed the allowed size.")
     source = page.decode("utf-8", errors="replace")
     parser = _InstantParser()
     parser.feed(source)
@@ -133,7 +133,7 @@ def search(query: str, limit: int = 20) -> list[dict[str, str]]:
         name = " ".join(html.unescape(item.get("name", "")).split())
         if not name:
             name = urllib.parse.unquote(urllib.parse.urlparse(audio_url).path.rsplit("/", 1)[-1].rsplit(".", 1)[0]).replace("_", " ")
-        results.append({"name": name[:120] or "Dźwięk MyInstants", "url": audio_url})
+        results.append({"name": name[:120] or "MyInstants sound", "url": audio_url})
         if len(results) >= max(1, min(30, limit)):
             break
     return results

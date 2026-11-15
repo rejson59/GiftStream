@@ -43,7 +43,7 @@ def test_connection_start_is_idempotent_while_client_is_connecting():
         assert first["ok"] and second["ok"]
         assert len(starts) == 1
         assert connector._thread is original_thread
-        assert "już działa" in second["message"]
+        assert "already running" in second["message"]
         await connector.stop()
         assert connector._thread is None
 

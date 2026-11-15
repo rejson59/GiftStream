@@ -47,7 +47,7 @@ GITHUB_RELEASES_URL = "https://github.com/rejson59/GiftStream/releases"
 _DOWNLOAD_INFO_CACHE: dict[str, Any] = {"expires": 0.0, "data": None}
 
 app = FastAPI(title="GiftStream", version=VERSION,
-              description="Prezenty z TikTok LIVE sterują grą")
+              description="TikTok LIVE gifts control the game")
 
 
 @app.middleware("http")
@@ -56,14 +56,14 @@ async def log_http_failures(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception as exc:
-        diagnostics.error("Nieobsłużony wyjątek HTTP %s %s: %s",
+        diagnostics.error("Unhandled HTTP exception %s %s: %s",
                           request.method, request.url.path, exc, exc_info=exc)
         raise
     if response.status_code >= 500:
-        diagnostics.error("HTTP %s %s zakończyło się statusem %s.",
+        diagnostics.error("HTTP %s %s finished with status %s.",
                           request.method, request.url.path, response.status_code)
     elif response.status_code >= 400:
-        diagnostics.warning("HTTP %s %s zakończyło się statusem %s.",
+        diagnostics.warning("HTTP %s %s finished with status %s.",
                             request.method, request.url.path, response.status_code)
     return response
 
@@ -112,22 +112,22 @@ class BrowserEventRequest(BaseModel):
 async def publish_game_action(action: GameAction) -> None:
     trigger = action.triggered_by
     trigger_hint = f" po zdarzeniu {trigger.type}" if trigger else ""
-    diagnostics.info("Dopasowano regułę '%s': akcja '%s'%s.",
-                     action.rule_name or "(bez nazwy)", action.action, trigger_hint)
+    diagnostics.info("Matched rule '%s': action '%s'%s.",
+                     action.rule_name or "unnamed", action.action, trigger_hint)
     action_id = await hub.publish_action(action)
     if not action.action.startswith(("parkour_", "dropper_")):
-        await hub.update_action(action_id, "sent", "Wysłano do lokalnego mostka; brak potwierdzenia wykonania przez grę.")
+        await hub.update_action(action_id, "sent", "Sent to the local bridge; the game has not confirmed execution.")
         return
     try:
         result = await _run_parkour_action(action)
         if result is None:
             await hub.update_action(
                 action_id, "sent",
-                "Mostek lokalny otrzymał akcję; lokalne sterowanie Minecraft jest wyłączone, więc wykonanie nie jest potwierdzone.")
+                "The local bridge received the action; local Minecraft control is disabled, so execution is not confirmed.")
         else:
             await hub.update_action(action_id, "succeeded", result)
     except Exception as exc:
-        diagnostics.error("Akcja Parkour '%s' z reguły '%s' nie powiodła się: %s",
+        diagnostics.error("Parkour action '%s' from rule '%s' failed: %s",
                           action.action, action.rule_name, exc, exc_info=exc)
         await hub.update_action(action_id, "failed", str(exc))
         await hub.publish_status({"parkour_result": {"ok": False, "message": str(exc)}})
@@ -144,7 +144,7 @@ async def _run_parkour_action(action: GameAction, *, allow_disabled: bool = Fals
     global parkour_reset_task, parkour_reset_player
     settings = parkour_server.settings()
     if not settings.get("enabled") and not allow_disabled:
-        diagnostics.warning("Akcja Parkour '%s' pominięta: lokalne sterowanie grą jest wyłączone lub serwer nie jest skonfigurowany.",
+        diagnostics.warning("Parkour action '%s' skipped: local game control is disabled or the server is not configured.",
                             action.action)
         return
     player = str(action.params.get("player") or settings.get("player") or "")
@@ -152,7 +152,7 @@ async def _run_parkour_action(action: GameAction, *, allow_disabled: bool = Fals
         if parkour_reset_task and not parkour_reset_task.done():
             parkour_reset_task.cancel()
         await asyncio.to_thread(parkour_server.start_reset, player)
-        diagnostics.info("Rozpoczęto reset Parkour z 60-sekundowym odliczaniem dla %s.", player)
+        diagnostics.info("Started the Parkour reset with a 60-second countdown for %s.", player)
         parkour_reset_player = player
         countdown_update_failed = False
         async def countdown() -> None:
@@ -167,54 +167,55 @@ async def _run_parkour_action(action: GameAction, *, allow_disabled: bool = Fals
                         # Preserve the countdown if the player is temporarily offline,
                         # but capture the first RCON failure in diagnostics.
                         if not countdown_update_failed:
-                            diagnostics.warning("Nie udało się zaktualizować odliczania resetu przez RCON: %s", exc)
+                            diagnostics.warning("Could not update the reset countdown through RCON: %s", exc)
                             countdown_update_failed = True
                     await asyncio.sleep(1)
                 result = await asyncio.to_thread(parkour_server.finish_reset, player)
-                diagnostics.info("Odliczanie zakończone; wysłano reset Parkour dla %s.", player)
+                diagnostics.info("Countdown finished; Parkour reset sent for %s.", player)
                 await hub.publish_status({"parkour_reset_countdown": 0, "parkour_result": result})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                diagnostics.error("Odliczanie resetu Parkour nie powiodło się: %s", exc, exc_info=exc)
+                diagnostics.error("The Parkour reset countdown failed: %s", exc, exc_info=exc)
                 await hub.publish_status({"parkour_reset_countdown": None, "parkour_result": str(exc)})
             finally:
                 parkour_reset_task = None
         parkour_reset_task = asyncio.create_task(countdown())
-        return "Rozpoczęto 60-sekundowe odliczanie resetu."
+        return "Started the 60-second reset countdown."
     if action.action == "parkour_antireset":
         if parkour_reset_task and not parkour_reset_task.done():
             parkour_reset_task.cancel()
             parkour_reset_task = None
             result = await asyncio.to_thread(parkour_server.cancel_reset, parkour_reset_player or player)
-            diagnostics.info("Anulowano reset Parkour dla %s.", parkour_reset_player or player)
+            diagnostics.info("Cancelled the Parkour reset for %s.", parkour_reset_player or player)
             await hub.publish_status({"parkour_reset_countdown": None, "parkour_result": result})
             return result
-        diagnostics.info("Odebrano akcję anty-reset, ale nie trwało żadne odliczanie.")
-        return "Nie trwa żadne odliczanie resetu do anulowania."
+        diagnostics.info("Anti-reset received, but no countdown was running.")
+        return "There is no reset countdown to cancel."
     if action.action == "parkour_jail":
-        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player)
+        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player, action.params)
         previous = parkour_jail_tasks.pop(player, None)
         if previous and not previous.done():
             previous.cancel()
+        jail_seconds = max(3, min(120, int((action.params or {}).get("seconds", 20) or 20)))
         async def release_jail() -> None:
             try:
-                await asyncio.sleep(20)
+                await asyncio.sleep(jail_seconds)
                 released = await asyncio.to_thread(parkour_server.release_jail, player)
-                diagnostics.info("Zwolniono gracza %s z parkour-jail.", player)
+                diagnostics.info("Released %s from the parkour cage.", player)
                 await hub.publish_status({"parkour_result": released})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                diagnostics.error("Nie udało się zwolnić gracza %s z parkour-jail: %s", player, exc, exc_info=exc)
+                diagnostics.error("Could not release player %s from parkour jail: %s", player, exc, exc_info=exc)
                 await hub.publish_status({"parkour_result": str(exc)})
             finally:
                 parkour_jail_tasks.pop(player, None)
         parkour_jail_tasks[player] = asyncio.create_task(release_jail())
-        await hub.publish_status({"parkour_result": result, "parkour_jail_seconds": 20})
+        await hub.publish_status({"parkour_result": result, "parkour_jail_seconds": jail_seconds})
         return result
     if action.action.startswith(("parkour_", "dropper_")):
-        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player)
+        result = await asyncio.to_thread(parkour_server.execute_action, action.action, player, action.params)
         await hub.publish_status({"parkour_result": result})
         return result
 
@@ -255,14 +256,14 @@ async def process_event(ev: TikTokEvent, *, trigger_actions: bool = True) -> Non
                 and parkour_server.settings().get("chat_relay_enabled")):
             try:
                 await asyncio.to_thread(parkour_server.relay_chat, ev.comment)
-                diagnostics.info("Komentarz LIVE przekazano do czatu Minecraft (treść pominięta w logu).")
+                diagnostics.info("LIVE comment relayed to the Minecraft chat (content omitted from the log).")
             except Exception as exc:
-                diagnostics.error("Nie udało się przekazać komentarza LIVE do Minecraft: %s", exc, exc_info=exc)
+                diagnostics.error("Could not relay the LIVE comment to Minecraft: %s", exc, exc_info=exc)
                 await hub.publish_status({"parkour_chat_relay_error": str(exc)})
         if trigger_actions:
             await engine.handle(ev)
     except Exception as exc:
-        diagnostics.error("Błąd przetwarzania zdarzenia source=%s type=%s: %s",
+        diagnostics.error("Error while processing the event source=%s type=%s: %s",
                           ev.source, ev.type, exc, exc_info=exc)
         raise
 
@@ -281,7 +282,7 @@ async def _currency_refresh_loop() -> None:
             await asyncio.to_thread(earnings_tracker.refresh_usd_to_pln)
         except Exception as exc:
             # Keep the last successful NBP rate and never delay application startup.
-            diagnostics.warning("Nie udało się odświeżyć kursu NBP; pozostawiam ostatni zapisany kurs: %s", exc)
+            diagnostics.warning("Could not refresh the NBP rate; keeping the last saved rate: %s", exc)
         await asyncio.sleep(12 * 60 * 60)
 
 
@@ -292,17 +293,17 @@ async def _gift_catalog_refresh_loop() -> None:
             await asyncio.to_thread(_refresh_catalog_safely)
         except Exception as exc:
             # Retain the last cached gift catalog if TikTok or the network is unavailable.
-            diagnostics.warning("Nie udało się odświeżyć katalogu giftów; zachowuję cache: %s", exc)
+            diagnostics.warning("Could not refresh the gift catalog; keeping the cache: %s", exc)
 
 
 def read_config() -> AppConfig:
     if CONFIG_PATH.exists():
         try:
             result = AppConfig(**json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-            diagnostics.info("Wczytano konfigurację GiftStream z %s.", CONFIG_PATH)
+            diagnostics.info("Loaded the GiftStream configuration from %s.", CONFIG_PATH)
             return result
         except Exception as exc:
-            diagnostics.error("Nie udało się wczytać konfiguracji %s: %s; używam wartości domyślnych.",
+            diagnostics.error("Could not load the configuration %s: %s; using defaults.",
                               CONFIG_PATH, exc, exc_info=exc)
     return AppConfig()
 
@@ -311,9 +312,9 @@ def save_config() -> None:
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(json.dumps(config.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
-        diagnostics.info("Zapisano konfigurację GiftStream.")
+        diagnostics.info("GiftStream configuration saved.")
     except Exception as exc:
-        diagnostics.error("Nie udało się zapisać konfiguracji GiftStream: %s", exc, exc_info=exc)
+        diagnostics.error("Could not save the GiftStream configuration: %s", exc, exc_info=exc)
         raise
 
 
@@ -327,22 +328,22 @@ def public_config() -> dict:
 def _refresh_catalog_safely() -> int:
     try:
         count = refresh_tiktok_catalog()
-        diagnostics.info("Katalog giftów TikTok odświeżony; dostępnych wpisów: %s.", count)
+        diagnostics.info("TikTok gift catalog refreshed; available entries: %s.", count)
         return count
     except Exception as exc:
         # Keep the last valid catalog and let the local gallery work offline.
-        diagnostics.warning("Nie udało się odświeżyć katalogu giftów TikTok; zachowuję cache: %s", exc)
+        diagnostics.warning("Could not refresh the TikTok gift catalog; keeping the cache: %s", exc)
         return 0
 
 
-_LEGACY_PARKOUR_DESCRIPTION = "Gotowe akcje dla dołączonej mapy 100 Levels: przesuwanie poziomu, więzienie, reset z 60-sekundowym odliczaniem i anty-reset. Wymaga lokalnego serwera GiftStream."
+_LEGACY_PARKOUR_DESCRIPTION = "Ready-made actions for the bundled 100 Levels map: pushing, level changes, a temporary jail, a 60-second reset countdown and anti-reset. Requires the local GiftStream server."
 _LEGACY_PARKOUR_RULES = {
-    "mp-rose": ("Róża → następny poziom", "gift", "Rose", "parkour_level_forward"),
-    "mp-tiktok": ("TikTok → poprzedni poziom", "gift", "TikTok", "parkour_level_back"),
-    "mp-follow": ("Follow → więzienie", "follow", None, "parkour_jail"),
-    "mp-donut": ("Donut → awans o poziom", "gift", "Donut", "parkour_level_forward"),
-    "mp-dragon": ("Smok → reset za 60 s", "gift", "Dragon", "parkour_reset"),
-    "mp-antireset": ("Anty-reset → anuluj reset", "gift", "Panda", "parkour_antireset"),
+    "mp-rose": ("Rose → next level", "gift", "Rose", "parkour_level_forward"),
+    "mp-tiktok": ("TikTok → previous level", "gift", "TikTok", "parkour_level_back"),
+    "mp-follow": ("Follow → jail", "follow", None, "parkour_jail"),
+    "mp-donut": ("Donut → climb one level", "gift", "Donut", "parkour_level_forward"),
+    "mp-dragon": ("Dragon → reset in 60 s", "gift", "Dragon", "parkour_reset"),
+    "mp-antireset": ("Anti-reset → cancel reset", "gift", "Panda", "parkour_antireset"),
 }
 
 
@@ -366,17 +367,46 @@ def _migrate_builtin_parkour_preset() -> bool:
 
 WOW_RULE_PREFIXES = ("mp-", "md-")
 WOW_RULE_IDS = {
-    "mp-darkness", "mp-follow-heart", "mp-share-lightning", "mp-disco",
-    "md-darkness", "md-share-lightning", "md-disco",
+    "mp-darkness", "mp-follow-heart", "mp-share-lightning", "mp-disco", "mp-checkpoint",
+    "md-darkness", "md-share-lightning", "md-disco", "md-slow", "md-jump",
 }
 
 
-def _add_missing_wow_rules() -> list[str]:
-    """Dopisuje nowe reguły „wow” do już zapisanych presetów (0.19.0).
+RETIRED_ACTIONS = {"parkour_speed", "dropper_speed", "parkour_night"}
 
-    Aktualizacja nie może skasować reguł ustawionych przez streamera, więc
-    dokładamy wyłącznie brakujące identyfikatory na końcu listy — istniejąca
-    kolejność i ceny pozostają nietknięte.
+
+def _retire_removed_actions() -> list[str]:
+    """0.21.0 removes the speed and night actions.
+
+    Rules that used them are migrated to a harmless effect instead of silently
+    breaking: speed → jump boost, night → blackout. The coin prices are kept so
+    the streamer is not surprised by a price change.
+    """
+    replacements = {"parkour_speed": "parkour_jump", "dropper_speed": "dropper_jump",
+                    "parkour_night": "parkour_blackout"}
+    changed: list[str] = []
+    for game_id in ("minecraft-parkour", "minecraft-dropper"):
+        saved = preset_store.get_preset(game_id)
+        if saved is None:
+            continue
+        touched = False
+        for rule in saved.rules:
+            if rule.action.type in RETIRED_ACTIONS:
+                rule.action.type = replacements[rule.action.type]
+                touched = True
+                changed.append(rule.id)
+        if touched:
+            preset_store.save_preset(saved)
+            diagnostics.info("Migrated %d rules away from removed speed/night actions.", len(changed))
+    return changed
+
+
+def _add_missing_wow_rules() -> list[str]:
+    """Appends the new “wow” rules to presets that are already saved (0.19.0).
+
+    An update must never delete rules configured by the streamer, so only the
+    missing identifiers are appended at the end — the existing order and coin
+    prices stay untouched.
     """
     added: list[str] = []
     for game_id in ("minecraft-parkour", "minecraft-dropper"):
@@ -392,21 +422,21 @@ def _add_missing_wow_rules() -> list[str]:
         saved.rules.extend(Rule(**rule) for rule in missing)
         preset_store.save_preset(saved)
         added.extend(rule["id"] for rule in missing)
-        diagnostics.info("Dodano %d reguł „wow” do presetu '%s'.", len(missing), saved.name)
+        diagnostics.info("Added %d “wow” rules to preset '%s'.", len(missing), saved.name)
     return added
 
 
 @app.on_event("startup")
 async def startup() -> None:
     global config, _catalog_refresh_task, _catalog_refresh_started, _currency_refresh_task, _gift_refresh_loop_task
-    diagnostics.info("Uruchamiam GiftStream %s; dane użytkownika: %s.", VERSION, DATA)
+    diagnostics.info("Starting GiftStream %s; user data: %s.", VERSION, DATA)
     config = read_config()
     if config.mode == "simulator":
         # Older builds persisted the demo as the startup mode, which generated
         # fabricated viewers/events on every launch. Migrate to an inert state.
         config.mode = "disconnected"
         save_config()
-        diagnostics.info("Wyłączono dawny tryb symulatora; GiftStream czeka na ręczne połączenie TikTok LIVE.")
+        diagnostics.info("The legacy simulator mode is disabled; GiftStream waits for a manual TikTok LIVE connection.")
     if config.tiktok_username:
         connector.username = config.tiktok_username
     for game_id in ("minecraft-parkour", "minecraft-dropper"):
@@ -416,11 +446,12 @@ async def startup() -> None:
                                             description=game["description"], rules=game["rules"]))
     _migrate_builtin_parkour_preset()
     _add_missing_wow_rules()
+    _retire_removed_actions()
     if config.active_preset_id not in preset_store.PRESET_IDS:
         config.active_preset_id = "minecraft-parkour"
         save_config()
     engine.load_preset(config.active_preset_id)
-    diagnostics.info("Załadowano preset '%s'; tryb źródła: %s.", config.active_preset_id, config.mode)
+    diagnostics.info("Loaded preset '%s'; source mode: %s.", config.active_preset_id, config.mode)
     # TikTok's public catalog is loaded once in the background; the panel remains usable offline.
     if not _catalog_refresh_started:
         _catalog_refresh_started = True
@@ -433,12 +464,12 @@ async def startup() -> None:
         # Restore the last explicitly selected public LIVE channel after an app restart.
         result = await connector.start("tiktok", config.tiktok_username)
         if not result.get("ok"):
-            diagnostics.warning("Automatyczne wznowienie TikTok LIVE nie powiodło się: %s", result.get("message", "błąd"))
+            diagnostics.warning("Automatic TikTok LIVE resume failed: %s", result.get("message", "error"))
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    diagnostics.info("Zamykanie GiftStream; sprzątam zadania i połączenia.")
+    diagnostics.info("Shutting GiftStream down; cleaning up tasks and connections.")
     await connector.stop()
     global parkour_reset_task
     if parkour_reset_task and not parkour_reset_task.done():
@@ -450,7 +481,7 @@ async def shutdown() -> None:
         try:
             await asyncio.to_thread(parkour_server.stop)
         except Exception as exc:
-            diagnostics.warning("Nie udało się zatrzymać lokalnego Minecraft podczas zamykania GiftStream: %s", exc)
+            diagnostics.warning("Could not stop local Minecraft while shutting GiftStream down: %s", exc)
     if _currency_refresh_task and not _currency_refresh_task.done():
         _currency_refresh_task.cancel()
     if _gift_refresh_loop_task and not _gift_refresh_loop_task.done():
@@ -507,31 +538,31 @@ class _TikTokImageRedirect(urllib.request.HTTPRedirectHandler):
 
 def _download_tiktok_image(url: str) -> tuple[bytes, str]:
     if not _trusted_tiktok_image_url(url):
-        raise ValueError("Nieobsługiwany adres grafiki TikToka.")
+        raise ValueError("Unsupported TikTok artwork URL.")
     request = urllib.request.Request(url, headers={"User-Agent": "GiftStream/1", "Referer": "https://www.tiktok.com/"})
     opener = urllib.request.build_opener(_TikTokImageRedirect())
     with opener.open(request, timeout=8) as response:
         if not _trusted_tiktok_image_url(response.geturl()):
-            raise ValueError("Przekierowanie grafiki wyszło poza CDN TikToka.")
+            raise ValueError("The artwork redirect left the TikTok CDN.")
         media_type = response.headers.get_content_type().lower()
         if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}:
-            raise ValueError("CDN TikToka nie zwrócił obsługiwanej grafiki rastrowej.")
+            raise ValueError("The TikTok CDN did not return a supported raster image.")
         payload = response.read(4 * 1024 * 1024 + 1)
     if not payload or len(payload) > 4 * 1024 * 1024:
-        raise ValueError("Grafika jest pusta albo przekracza limit 4 MB.")
+        raise ValueError("The artwork is empty or exceeds the 4 MB limit.")
     return payload, media_type
 
 
 @app.get("/api/gifts/image")
 async def gift_image(url: str) -> Response:
     if not _trusted_tiktok_image_url(url):
-        raise HTTPException(400, "Adres grafiki musi należeć do zaufanego CDN TikToka.")
+        raise HTTPException(400, "The artwork URL must belong to a trusted TikTok CDN.")
     try:
         payload, media_type = await asyncio.to_thread(_download_tiktok_image, url)
     except Exception as exc:
         # Missing CDN art is expected for gifts that TikTok no longer serves;
         # return a cacheable non-server error so a long feed cannot flood diagnostics.
-        raise HTTPException(404, f"Grafika niedostępna z CDN TikToka: {exc}",
+        raise HTTPException(404, f"Artwork unavailable from the TikTok CDN: {exc}",
                             headers={"Cache-Control": "public, max-age=300"}) from exc
     return Response(payload, media_type=media_type,
                     headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"})
@@ -543,19 +574,19 @@ async def upload_sound(request: Request, filename: str = "") -> dict[str, Any]:
     suffix = Path(safe_name).suffix.lower()
     media_type = _SOUND_MIME.get(suffix)
     if not media_type:
-        raise HTTPException(415, "Wybierz plik MP3, WAV, OGG, M4A, AAC lub FLAC.")
+        raise HTTPException(415, "Choose an MP3, WAV, OGG, M4A, AAC or FLAC file.")
     try:
         content_length = int(request.headers.get("content-length", "0") or 0)
     except ValueError:
         content_length = 0
     if content_length > _SOUND_UPLOAD_LIMIT:
-        raise HTTPException(413, "Plik dźwiękowy przekracza limit 10 MB.")
+        raise HTTPException(413, "The audio file exceeds the 10 MB limit.")
     chunks: list[bytes] = []
     total = 0
     async for chunk in request.stream():
         total += len(chunk)
         if total > _SOUND_UPLOAD_LIMIT:
-            raise HTTPException(413, "Plik dźwiękowy przekracza limit 10 MB.")
+            raise HTTPException(413, "The audio file exceeds the 10 MB limit.")
         chunks.append(chunk)
     payload = b"".join(chunks)
     signatures = {".wav": lambda b: len(b) > 12 and b[:4] == b"RIFF" and b[8:12] == b"WAVE",
@@ -564,11 +595,11 @@ async def upload_sound(request: Request, filename: str = "") -> dict[str, Any]:
                   ".aac": lambda b: len(b) > 2 and b[0] == 0xff and (b[1] & 0xf6) == 0xf0,
                   ".mp3": lambda b: b.startswith(b"ID3") or (len(b) > 1 and b[0] == 0xff and (b[1] & 0xe0) == 0xe0)}
     if not payload or not signatures[suffix](payload):
-        raise HTTPException(415, "Plik nie wygląda na dźwięk w formacie zgodnym z jego rozszerzeniem.")
+        raise HTTPException(415, "The file does not look like audio matching its extension.")
     _SOUND_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     asset = f"{uuid.uuid4().hex}{suffix}"
     (_SOUND_UPLOAD_DIR / asset).write_bytes(payload)
-    diagnostics.info("Zapisano lokalny dźwięk użytkownika (%s, %s bajtów).", suffix, len(payload))
+    diagnostics.info("Saved the user's local sound (%s, %s bytes).", suffix, len(payload))
     return {"url": f"/api/sounds/uploads/{asset}", "name": safe_name, "size": len(payload), "content_type": media_type}
 
 
@@ -580,7 +611,7 @@ def _save_sound_asset(payload: bytes, suffix: str) -> str:
 
 
 def _wav_duration_seconds(path: Path) -> float | None:
-    """Długość pliku WAV; formaty skompresowane panel mierzy w przeglądarce."""
+    "WAV file duration; compressed formats are measured by the panel in the browser."""
     if path.suffix.lower() != ".wav":
         return None
     try:
@@ -591,7 +622,7 @@ def _wav_duration_seconds(path: Path) -> float | None:
 
 @app.get("/api/sounds/uploads")
 async def list_uploaded_sounds() -> dict[str, Any]:
-    """Wgrane pliki audio — do ponownego użycia bez wgrywania od nowa."""
+    "Uploaded audio files — reusable without uploading them again."""
     items: list[dict[str, Any]] = []
     if _SOUND_UPLOAD_DIR.is_dir():
         for path in sorted(_SOUND_UPLOAD_DIR.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
@@ -623,43 +654,43 @@ def _unsafe_host(hostname: str) -> bool:
             hostname.endswith((".localhost", ".local", ".internal")))
 
 
-def _public_audio_url(value: str, what: str = "Dźwięk", allow_local: bool = False) -> str:
-    """Akceptuje wyłącznie publiczny HTTPS (albo plik wgrany do GiftStream)."""
+def _public_audio_url(value: str, what: str = "Sound", allow_local: bool = False) -> str:
+    """Accepts only public HTTPS (or a file uploaded to GiftStream)."""
     if allow_local and value.startswith("/api/sounds/uploads/"):
         return value
     parsed = urlparse(value)
     hostname = (parsed.hostname or "").lower().rstrip(".")
     if (len(value) > 2048 or parsed.scheme != "https" or not hostname or parsed.username or
             parsed.password or _unsafe_host(hostname)):
-        raise HTTPException(422, f"{what} musi być publicznym linkiem HTTPS albo wgranym plikiem lokalnym.")
+        raise HTTPException(422, f"{what} must be a public HTTPS link or an uploaded local file.")
     return value
 
 
 @app.post("/api/sounds/fetch")
 async def fetch_sound(data: dict[str, Any]) -> dict[str, Any]:
-    """Pobiera dźwięk z publicznego linku do lokalnego pliku, żeby dało się go przyciąć.
+    """Downloads a sound from a public link into a local file so it can be trimmed.
 
-    Przeglądarka nie potrafi odczytać bajtów z obcego serwera (CORS), więc to
-    GiftStream robi kontrolowane pobranie: tylko HTTPS, limit 10 MB, sprawdzamy
-    typ pliku i zapisujemy lokalnie. Dzięki temu przycinanie działa też dla
-    wyników MyInstants.
+    The browser cannot read bytes from a foreign server (CORS), so GiftStream
+    performs the controlled download: HTTPS only, 10 MB limit, the file type is
+    verified and the file is stored locally. Thanks to that, trimming also works
+    for MyInstants results.
     """
-    url = _public_audio_url(str(data.get("url") or "").strip(), "Link dźwięku")
+    url = _public_audio_url(str(data.get("url") or "").strip(), "Sound link")
     try:
         downloaded, _media_type = await asyncio.to_thread(_download_audio, url)
     except Exception as exc:
-        raise HTTPException(502, f"Nie udało się pobrać dźwięku z linku: {exc}") from exc
+        raise HTTPException(502, f"Could not download the sound from the link: {exc}") from exc
     suffix = downloaded["suffix"]
     asset = _save_sound_asset(downloaded["payload"], suffix)
-    name = str(data.get("name") or Path(urlparse(url).path).name or "dźwięk")[:100]
-    diagnostics.info("Pobrano dźwięk z linku do pliku lokalnego (%s, %s bajtów).", suffix, len(downloaded["payload"]))
+    name = str(data.get("name") or Path(urlparse(url).path).name or "sound")[:100]
+    diagnostics.info("Downloaded the linked sound into a local file (%s, %s bytes).", suffix, len(downloaded["payload"]))
     return {"url": f"/api/sounds/uploads/{asset}", "name": name, "size": len(downloaded["payload"]),
             "content_type": downloaded["content_type"], "source": "download"}
 
 
 class _AudioRedirect(urllib.request.HTTPRedirectHandler):
-    """Blokuje przekierowania poza publiczny HTTPS — inaczej link mógłby
-    prowadzić do localhostu albo sieci lokalnej streamera (SSRF)."""
+    """Blocks redirects outside public HTTPS — otherwise a link could point to
+    localhost or the streamer's LAN (SSRF)."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         target = urljoin(req.full_url, newurl)
@@ -676,24 +707,24 @@ def _download_audio(url: str) -> tuple[dict[str, Any], str]:
     opener = urllib.request.build_opener(_AudioRedirect())
     with opener.open(request, timeout=10) as response:
         final = response.geturl()
-        _public_audio_url(final, "Link dźwięku")
+        _public_audio_url(final, "Sound link")
         raw_type = (response.headers.get_content_type() or "").lower()
         length = response.headers.get("Content-Length")
         if length and int(length) > _AUDIO_DOWNLOAD_LIMIT:
-            raise ValueError("Dźwięk przekracza limit 10 MB.")
+            raise ValueError("The sound exceeds the 10 MB limit.")
         payload = response.read(_AUDIO_DOWNLOAD_LIMIT + 1)
     if not payload or len(payload) > _AUDIO_DOWNLOAD_LIMIT:
-        raise ValueError("Dźwięk jest pusty albo przekracza limit 10 MB.")
+        raise ValueError("The sound is empty or exceeds the 10 MB limit.")
     suffix = _AUDIO_MIME_EXT.get(raw_type) or Path(urlparse(final).path).suffix.lower()
     if suffix not in _AUDIO_URL_EXT:
-        raise ValueError("Link nie wskazuje obsługiwanego pliku audio (MP3, WAV, OGG, M4A, AAC, FLAC).")
+        raise ValueError("The link does not point to a supported audio file (MP3, WAV, OGG, M4A, AAC, FLAC).")
     signatures = {".wav": lambda b: len(b) > 12 and b[:4] == b"RIFF" and b[8:12] == b"WAVE",
                   ".ogg": lambda b: b.startswith(b"OggS"), ".flac": lambda b: b.startswith(b"fLaC"),
                   ".m4a": lambda b: len(b) > 8 and b[4:8] == b"ftyp",
                   ".aac": lambda b: len(b) > 2 and b[0] == 0xff and (b[1] & 0xf6) == 0xf0,
                   ".mp3": lambda b: b.startswith(b"ID3") or (len(b) > 1 and b[0] == 0xff and (b[1] & 0xe0) == 0xe0)}
     if not signatures[suffix](payload):
-        raise ValueError("Pobrany plik nie wygląda na dźwięk w formacie zgodnym z rozszerzeniem.")
+        raise ValueError("The downloaded file does not look like audio matching its extension.")
     return ({"payload": payload, "suffix": suffix,
              "content_type": _SOUND_MIME.get(suffix, raw_type or "application/octet-stream")},
             raw_type)
@@ -701,10 +732,10 @@ def _download_audio(url: str) -> tuple[dict[str, Any], str]:
 
 @app.post("/api/sounds/info")
 async def sound_info(request: Request, filename: str = "") -> dict[str, Any]:
-    """Parametry dźwięku: długość, kanały, częstotliwość i przebieg fali."""
+    "Sound parameters: duration, channels, sample rate and the waveform."""
     payload = await request.body()
     if not payload or len(payload) > _SOUND_UPLOAD_LIMIT:
-        raise HTTPException(413, "Plik dźwiękowy jest pusty albo przekracza limit 10 MB.")
+        raise HTTPException(413, "The audio file is empty or exceeds the 10 MB limit.")
     try:
         info = await asyncio.to_thread(audio_tools.wav_info, payload)
         peaks = await asyncio.to_thread(audio_tools.wav_peaks, payload, 180)
@@ -717,12 +748,12 @@ async def sound_info(request: Request, filename: str = "") -> dict[str, Any]:
 async def trim_sound(request: Request, start: float = 0, end: float | None = None,
                      fade_in_ms: int = 0, fade_out_ms: int = 0,
                      filename: str = "") -> dict[str, Any]:
-    """Wycina fragment WAV (z miękkim wejściem/wyjściem) i zapisuje jako nowy dźwięk."""
+    "Cuts a WAV fragment (with soft fade in/out) and saves it as a new sound."""
     payload = await request.body()
     if not payload or len(payload) > _SOUND_UPLOAD_LIMIT:
-        raise HTTPException(413, "Plik dźwiękowy jest pusty albo przekracza limit 10 MB.")
+        raise HTTPException(413, "The audio file is empty or exceeds the 10 MB limit.")
     if start < 0 or (end is not None and end <= start):
-        raise HTTPException(422, "Zakres przycinania jest niepoprawny.")
+        raise HTTPException(422, "The trim range is invalid.")
     try:
         clipped, info = await asyncio.to_thread(
             audio_tools.trim_wav, payload, start, end, fade_in_ms, fade_out_ms)
@@ -731,7 +762,7 @@ async def trim_sound(request: Request, start: float = 0, end: float | None = Non
     asset = _save_sound_asset(clipped, ".wav")
     stem = Path(Path(filename.replace("\\", "/")).name).stem[:80] or "fragment"
     label = f"{stem} · {info['start']:.2f}–{info['end']:.2f} s"[:160]
-    diagnostics.info("Przycięto dźwięk do %.2f s (fade %s/%s ms).", info["duration"], fade_in_ms, fade_out_ms)
+    diagnostics.info("Trimmed the sound to %.2f s (fade %s/%s ms).", info["duration"], fade_in_ms, fade_out_ms)
     return {"url": f"/api/sounds/uploads/{asset}", "name": label, "size": len(clipped),
             "content_type": "audio/wav", **info}
 
@@ -739,10 +770,10 @@ async def trim_sound(request: Request, start: float = 0, end: float | None = Non
 @app.get("/api/sounds/uploads/{filename}")
 async def uploaded_sound(filename: str) -> FileResponse:
     if not _SOUND_FILE_RE.fullmatch(filename):
-        raise HTTPException(404, "Nie znaleziono pliku audio.")
+        raise HTTPException(404, "Audio file not found.")
     path = _SOUND_UPLOAD_DIR / filename
     if not path.is_file():
-        raise HTTPException(404, "Nie znaleziono pliku audio.")
+        raise HTTPException(404, "Audio file not found.")
     return FileResponse(path, media_type=_SOUND_MIME[path.suffix],
                         headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
@@ -750,14 +781,14 @@ async def uploaded_sound(filename: str) -> FileResponse:
 @app.get("/api/sounds/myinstants")
 async def myinstants_search(q: str = "") -> dict[str, Any]:
     if len(q) > 100:
-        raise HTTPException(400, "Wyszukiwana fraza może mieć maksymalnie 100 znaków.")
+        raise HTTPException(400, "The search phrase can be at most 100 characters.")
     if not q.strip():
-        return {"results": [], "notice": "Wyszukiwarka MyInstants jest nieoficjalna i może okresowo przestać działać."}
+        return {"results": [], "notice": "The MyInstants search is unofficial and may stop working from time to time."}
     try:
         results = await asyncio.to_thread(search_myinstants, q)
     except Exception as exc:
-        raise HTTPException(502, f"Nie udało się pobrać wyników MyInstants: {exc}") from exc
-    return {"results": results, "notice": "Wyniki pochodzą z nieoficjalnego wyszukiwania MyInstants; dostępność plików może się zmieniać."}
+        raise HTTPException(502, f"Could not load the MyInstants results: {exc}") from exc
+    return {"results": results, "notice": "Results come from the unofficial MyInstants search; file availability may change."}
 
 @app.get("/api/health")
 async def health() -> dict:
@@ -772,13 +803,13 @@ async def check_for_updates() -> dict:
     queued = update_state.request_check()
     status = update_state.status()
     return {"ok": True, "checking": True, "check_id": status["check_id"],
-            "message": "Sprawdzanie aktualizacji rozpoczęte." if queued else "Sprawdzanie aktualizacji jest już w toku."}
+            "message": "Update check started." if queued else "An update check is already running."}
 
 @app.post("/api/updates/apply")
 async def apply_downloaded_update() -> dict:
     if not update_state.request_apply():
-        raise HTTPException(409, "Nie ma pobranej aktualizacji do zastosowania.")
-    return {"ok": True, "message": "GiftStream uruchomi się ponownie z pobraną aktualizacją."}
+        raise HTTPException(409, "There is no downloaded update to apply.")
+    return {"ok": True, "message": "GiftStream will restart with the downloaded update."}
 
 @app.get("/api/download-info")
 async def download_info() -> dict:
@@ -788,7 +819,7 @@ async def download_info() -> dict:
         return _DOWNLOAD_INFO_CACHE["data"]
     fallback = {"available": False, "url": GITHUB_RELEASES_URL,
                 "releases_url": GITHUB_RELEASES_URL,
-                "message": "Wydanie GiftStream dla Windows nie jest obecnie dostępne."}
+                "message": "The GiftStream Windows release is not available right now."}
 
     def check_github_release() -> dict:
         request = urllib.request.Request(
@@ -809,13 +840,13 @@ async def download_info() -> dict:
             version = release.get("tag_name", "")
             return {"available": True, "kind": "application", "url": asset_url,
                     "releases_url": GITHUB_RELEASES_URL, "version": version,
-                    "message": f"Pobierz GiftStream {version} dla Windows."}
+                    "message": f"Download GiftStream {version} for Windows."}
         return fallback
 
     try:
         result = await asyncio.to_thread(check_github_release)
     except Exception:
-        result = {**fallback, "message": "Nie udało się sprawdzić wydań. Otwórz stronę wydań GiftStream."}
+        result = {**fallback, "message": "Could not check the releases. Open the GiftStream releases page."}
     _DOWNLOAD_INFO_CACHE.update({"data": result, "expires": now + (300 if result["available"] else 60)})
     return result
 
@@ -840,18 +871,18 @@ async def snapshot() -> dict:
 @app.post("/api/stats/clear-activity")
 async def clear_activity() -> dict[str, Any]:
     hub.clear_activity()
-    diagnostics.info("Użytkownik wyczyścił listę aktywności; liczniki pozostawiono bez zmian.")
+    diagnostics.info("The user cleared the activity feed; counters were left unchanged.")
     await hub.broadcast_snapshot()
-    return {"ok": True, "message": "Wyczyszczono listę aktywności. Liczniki statystyk pozostały bez zmian."}
+    return {"ok": True, "message": "Activity feed cleared. Statistics counters were left unchanged."}
 
 @app.post("/api/stats/reset")
 async def reset_stats() -> dict[str, Any]:
     hub.reset_stats()
     engine.reset_stats()
-    diagnostics.info("Użytkownik wyzerował wszystkie statystyki bieżącej sesji.")
+    diagnostics.info("The user reset all statistics of the current session.")
     await hub.broadcast_snapshot()
     await hub.publish_status({"stats_reset": True})
-    return {"ok": True, "message": "Wyzerowano wszystkie statystyki bieżącej sesji."}
+    return {"ok": True, "message": "All statistics of the current session were reset."}
 
 @app.get("/api/config")
 async def get_config() -> dict:
@@ -865,7 +896,7 @@ async def update_config(data: dict[str, Any]) -> dict:
         if url.startswith("/api/sounds/uploads/"):
             filename = url.rsplit("/", 1)[-1]
             if not _SOUND_FILE_RE.fullmatch(filename) or not (_SOUND_UPLOAD_DIR / filename).is_file():
-                raise HTTPException(422, "Nie znaleziono przesłanego pliku dźwiękowego.")
+                raise HTTPException(422, "No uploaded audio file was found.")
         elif url:
             _public_audio_url(url)
         data["sound_url"] = url
@@ -901,17 +932,17 @@ async def refresh_earnings_rate() -> dict[str, Any]:
         return {"ok": True, "settings": await asyncio.to_thread(earnings_tracker.refresh_usd_to_pln)}
     except Exception as exc:
         return {"ok": False, "settings": earnings_tracker.get_settings(),
-                "message": f"Nie udało się pobrać najnowszego kursu NBP: {exc}"}
+                "message": f"Could not download the latest NBP rate: {exc}"}
 
 @app.get("/api/minecraft/versions")
 async def minecraft_version_options() -> dict[str, Any]:
     try:
         versions = await asyncio.to_thread(minecraft_versions)
-        diagnostics.info("Pobrano listę stabilnych wersji Minecraft; latest=%s.", versions.get("latest"))
+        diagnostics.info("Downloaded the list of stable Minecraft versions; latest=%s.", versions.get("latest"))
         return versions
     except Exception as exc:
-        diagnostics.error("Nie udało się pobrać manifestu wersji Minecraft: %s", exc, exc_info=exc)
-        raise HTTPException(502, f"Nie udało się pobrać wersji Minecraft z manifestu Mojang: {exc}") from exc
+        diagnostics.error("Could not download the Minecraft version manifest: %s", exc, exc_info=exc)
+        raise HTTPException(502, f"Could not download the Minecraft version from the Mojang manifest: {exc}") from exc
 
 @app.get("/api/minecraft/parkour")
 async def parkour_status() -> dict[str, Any]:
@@ -926,10 +957,10 @@ async def parkour_setup(req: ParkourSetupRequest) -> dict[str, Any]:
     try:
         return await asyncio.to_thread(parkour_server.setup, req.server_dir, req.player, req.eula_accepted, req.version, req.game_mode)
     except (ValueError, FileExistsError) as exc:
-        diagnostics.warning("Konfiguracja Minecraft została odrzucona: %s", exc)
+        diagnostics.warning("Minecraft setup was rejected: %s", exc)
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        diagnostics.error("Endpoint konfiguracji Minecraft zakończył się błędem: %s", exc, exc_info=exc)
+        diagnostics.error("The Minecraft setup endpoint returned an error: %s", exc, exc_info=exc)
         raise HTTPException(502, str(exc)) from exc
 
 @app.post("/api/minecraft/parkour/start")
@@ -937,7 +968,7 @@ async def parkour_start() -> dict[str, Any]:
     try:
         return await asyncio.to_thread(parkour_server.start)
     except Exception as exc:
-        diagnostics.error("Nie udało się uruchomić serwera Minecraft przez API: %s", exc, exc_info=exc)
+        diagnostics.error("Could not start the Minecraft server through the API: %s", exc, exc_info=exc)
         raise HTTPException(400, str(exc)) from exc
 
 @app.post("/api/minecraft/parkour/stop")
@@ -945,7 +976,7 @@ async def parkour_stop() -> dict[str, Any]:
     try:
         return await asyncio.to_thread(parkour_server.stop)
     except Exception as exc:
-        diagnostics.error("Nie udało się zatrzymać serwera Minecraft przez API: %s", exc, exc_info=exc)
+        diagnostics.error("Could not stop the Minecraft server through the API: %s", exc, exc_info=exc)
         raise HTTPException(400, str(exc)) from exc
 
 @app.put("/api/minecraft/parkour/enabled")
@@ -955,7 +986,7 @@ async def parkour_enabled(request: dict[str, bool]) -> dict[str, Any]:
         raise HTTPException(400, "Najpierw skonfiguruj lokalny serwer parkour.")
     state["enabled"] = bool(request.get("enabled", False))
     await asyncio.to_thread(parkour_server.save_settings, state)
-    diagnostics.info("Sterowanie zdarzeniami w lokalnym Parkour %s.", "włączono" if state["enabled"] else "wyłączono")
+    diagnostics.info("Sterowanie zdarzeniami w lokalnym Parkour %s.", "enabled" if state["enabled"] else "disabled")
     return {**await asyncio.to_thread(parkour_server.status),
             "enabled": state["enabled"],
             "chat_relay_enabled": bool(state.get("chat_relay_enabled"))}
@@ -967,7 +998,7 @@ async def parkour_chat_relay(req: ParkourChatRelayRequest) -> dict[str, Any]:
         raise HTTPException(400, "Najpierw skonfiguruj lokalny serwer parkour.")
     state["chat_relay_enabled"] = req.enabled
     await asyncio.to_thread(parkour_server.save_settings, state)
-    diagnostics.info("Przekazywanie komentarzy LIVE do Minecraft %s.", "włączono" if req.enabled else "wyłączono")
+    diagnostics.info("Przekazywanie komentarzy LIVE do Minecraft %s.", "enabled" if req.enabled else "disabled")
     return {"ok": True, "chat_relay_enabled": req.enabled}
 
 @app.post("/api/minecraft/parkour/action")
@@ -977,60 +1008,58 @@ async def parkour_test_action(req: ParkourActionRequest) -> dict[str, Any]:
     mode = state.get("game_mode", "parkour")
     prefix = "dropper_" if mode == "dropper" else "parkour_"
     if req.action not in KNOWN_ACTIONS or not req.action.startswith(prefix):
-        raise HTTPException(400, f"Akcja nie pasuje do aktywnego trybu {mode}.")
+        raise HTTPException(400, f"This action does not match the active mode {mode}.")
     if not state.get("server_dir"):
         raise HTTPException(409, "Najpierw skonfiguruj lokalny serwer Minecraft.")
     status = await asyncio.to_thread(parkour_server.status)
     if not status.get("ready"):
-        raise HTTPException(409, status.get("message") or "Serwer Minecraft nie jest jeszcze gotowy przez RCON.")
+        raise HTTPException(409, status.get("message") or "The Minecraft server is not ready over RCON yet.")
     player = req.player or str(state.get("player", ""))
     if not player or player.casefold() not in {str(name).casefold() for name in status.get("players", [])}:
-        raise HTTPException(409, f"Gracz {player or '(nieustawiony)'} nie jest online na serwerze Minecraft.")
+        raise HTTPException(409, f"Player {player or '(not set)'} is not online on the Minecraft server.")
     try:
         # A manual test is intentionally independent of the LIVE automation toggle.
         # That toggle controls incoming gifts; this endpoint is an explicit user action.
         message = await _run_parkour_action(
             GameAction(action=req.action, params={"player": player}), allow_disabled=True)
     except Exception as exc:
-        diagnostics.warning("Test akcji Minecraft '%s' nie powiódł się: %s", req.action, exc)
-        raise HTTPException(502, f"Nie udało się wykonać akcji Minecraft: {exc}") from exc
-    return {"ok": True, "message": message or f"Akcja {req.action} wysłana dla {player}."}
+        diagnostics.warning("Minecraft action test '%s' failed: %s", req.action, exc)
+        raise HTTPException(502, f"Could not run the Minecraft action: {exc}") from exc
+    return {"ok": True, "message": message or f"Action {req.action} sent for {player}."}
 
 @app.get("/api/actions")
 async def actions() -> list[dict]:
     from .models import KNOWN_ACTIONS
     labels = {
-        "parkour_push": "Parkour: strzała Punch II",
-        "parkour_level_forward": "Parkour: kolejny poziom",
-        "parkour_level_back": "Parkour: poprzedni poziom",
-        "parkour_jail": "Parkour: więzienie",
-        "parkour_reset": "Parkour: reset za 60 s",
-        "parkour_antireset": "Parkour: anty-reset",
-        "parkour_speed": "Parkour: sprint · 8 s",
-        "parkour_slow": "Parkour: spowolnienie · 7 s",
-        "parkour_blind": "Parkour: ciemność · 4 s",
-        "parkour_jump": "Parkour: wysoki skok · 4 s",
-        "parkour_shield": "Parkour: tarcza · 6 s",
-        "parkour_cleanse": "Parkour: usuń negatywne efekty",
-        "dropper_push": "Dropper: strzała Punch II",
-        "dropper_level_forward": "Dropper: następny poziom",
-        "dropper_level_back": "Dropper: poprzedni poziom",
-        "dropper_reset": "Dropper: powrót na start",
-        "dropper_speed": "Dropper: sprint · 8 s",
-        "dropper_slow": "Dropper: spowolnienie · 7 s",
-        "dropper_blind": "Dropper: ciemność · 4 s",
-        "dropper_jump": "Dropper: wysoki skok",
-        "dropper_shield": "Dropper: tarcza · 6 s",
-        "dropper_cleanse": "Dropper: usuń negatywne efekty",
-        "parkour_blackout": "Parkour: ciemność 15 s (ledwo widać)",
-        "parkour_lightning": "Parkour: piorun",
+        "parkour_push": "Parkour: Punch II arrow",
+        "parkour_level_forward": "Parkour: next level",
+        "parkour_level_back": "Parkour: previous level",
+        "parkour_checkpoint": "Parkour: back to checkpoint",
+        "parkour_jail": "Parkour: jail for 20 s",
+        "parkour_reset": "Parkour: reset in 60 s",
+        "parkour_antireset": "Parkour: cancel reset",
+        "parkour_slow": "Parkour: slowness · 7 s",
+        "parkour_blind": "Parkour: darkness · 4 s",
+        "parkour_blackout": "Parkour: blackout · 15 s (barely visible)",
+        "parkour_lightning": "Parkour: lightning",
         "parkour_disco": "Parkour: disco",
-        "parkour_night": "Parkour: noc",
-        "parkour_heart": "Parkour: serduszko + owacja (follow)",
-        "dropper_blackout": "Dropper: ciemność 15 s (ledwo widać)",
-        "dropper_lightning": "Dropper: piorun",
+        "parkour_heart": "Parkour: hearts + ovation (follow)",
+        "parkour_jump": "Parkour: high jump · 4 s",
+        "parkour_shield": "Parkour: shield · 6 s",
+        "parkour_cleanse": "Parkour: clear negative effects",
+        "dropper_push": "Dropper: Punch II arrow",
+        "dropper_level_forward": "Dropper: next level",
+        "dropper_level_back": "Dropper: previous level",
+        "dropper_reset": "Dropper: back to the start",
+        "dropper_slow": "Dropper: slowness · 7 s",
+        "dropper_blind": "Dropper: darkness · 4 s",
+        "dropper_blackout": "Dropper: blackout · 15 s (barely visible)",
+        "dropper_lightning": "Dropper: lightning",
         "dropper_disco": "Dropper: disco",
-        "dropper_heart": "Dropper: serduszko + owacja (follow)",
+        "dropper_heart": "Dropper: hearts + ovation (follow)",
+        "dropper_jump": "Dropper: high jump",
+        "dropper_shield": "Dropper: shield · 6 s",
+        "dropper_cleanse": "Dropper: clear negative effects",
     }
     return [{"id": action, "label": labels[action]} for action in KNOWN_ACTIONS]
 
@@ -1042,43 +1071,43 @@ async def list_presets() -> list[dict]:
 @app.get("/api/presets/{preset_id}")
 async def get_preset(preset_id: str) -> dict:
     if preset_id not in preset_store.PRESET_IDS:
-        raise HTTPException(404, "Nie znaleziono presetu")
+        raise HTTPException(404, "Preset not found")
     p = preset_store.get_preset(preset_id)
     if p is None:
-        raise HTTPException(404, "Nie znaleziono presetu")
+        raise HTTPException(404, "Preset not found")
     return p.model_dump()
 
 def _validate_rule_sound_url(url: str) -> None:
     if url.startswith("/api/sounds/uploads/"):
         filename = url.rsplit("/", 1)[-1]
         if not _SOUND_FILE_RE.fullmatch(filename) or not (_SOUND_UPLOAD_DIR / filename).is_file():
-            raise HTTPException(422, "Nie znaleziono przesłanego pliku dźwiękowego przypisanego do reguły.")
+            raise HTTPException(422, "No uploaded audio file assigned to the rule was found.")
         return
-    _public_audio_url(url, "Dźwięk reguły", allow_local=True)
+    _public_audio_url(url, "Rule sound", allow_local=True)
 
 
 @app.put("/api/presets/{preset_id}")
 async def update_preset(preset_id: str, preset: Preset) -> dict:
     if preset_id not in preset_store.PRESET_IDS:
-        raise HTTPException(404, "Nie znaleziono presetu")
+        raise HTTPException(404, "Preset not found")
     if preset.id != preset_id:
-        raise HTTPException(400, "ID w URL i body muszą być takie same")
+        raise HTTPException(400, "The IDs in the URL and the body must match")
     for rule in preset.rules:
         if rule.sound:
             _validate_rule_sound_url(rule.sound)
     saved = preset_store.save_preset(preset)
     if engine.active_preset and engine.active_preset.id == preset_id:
         engine.load_preset(preset_id)
-    diagnostics.info("Zapisano preset Parkour '%s' (%s reguł).", saved.name, len(saved.rules))
+    diagnostics.info("Saved the Parkour preset '%s' (%s rules).", saved.name, len(saved.rules))
     return saved.model_dump()
 
 @app.post("/api/presets/{preset_id}/activate")
 async def activate_preset(preset_id: str) -> dict:
     if preset_id not in preset_store.PRESET_IDS:
-        raise HTTPException(404, "Nie znaleziono presetu")
+        raise HTTPException(404, "Preset not found")
     preset = engine.load_preset(preset_id)
     if preset is None:
-        raise HTTPException(404, "Nie znaleziono presetu")
+        raise HTTPException(404, "Preset not found")
     config.active_preset_id = preset_id
     save_config()
     await hub.publish_status({"active_preset_id": preset_id, "active_preset_name": preset.name})
@@ -1093,7 +1122,7 @@ async def get_diagnostics(limit: int = 300) -> dict[str, Any]:
 
 @app.post("/api/logs/client")
 async def report_client_diagnostic(req: ClientDiagnosticRequest) -> dict[str, bool]:
-    diagnostics.error("Błąd interfejsu (%s): %s", req.source, req.message)
+    diagnostics.error("UI error (%s): %s", req.source, req.message)
     return {"ok": True}
 
 @app.post("/api/logs/clear")
@@ -1123,12 +1152,12 @@ async def connect(req: ConnectRequest) -> dict:
         save_config()
         await hub.broadcast_snapshot()
         await hub.publish_status({"stats_reset": True})
-        diagnostics.info("Nowy kanał TikTok LIVE @%s; wyzerowano statystyki przed połączeniem.", username)
+        diagnostics.info("New TikTok LIVE channel @%s; statistics were reset before connecting.", username)
     try:
         result = await connector.start(req.mode, username)
     except Exception as exc:
-        diagnostics.error("Błąd uruchamiania konektora (%s): %s", req.mode, exc, exc_info=exc)
-        raise HTTPException(500, "Nie udało się uruchomić połączenia. Szczegóły są w panelu logów.") from exc
+        diagnostics.error("Connector start error (%s): %s", req.mode, exc, exc_info=exc)
+        raise HTTPException(500, "Could not start the connection. Details are in the log panel.") from exc
     if result.get("ok"):
         config.mode = req.mode
         config.tiktok_username = username if req.mode == "tiktok" else config.tiktok_username
@@ -1143,8 +1172,8 @@ async def disconnect() -> dict:
     config.mode = "disconnected"
     save_config()
     await hub.publish_status(connector.status())
-    diagnostics.info("Połączenie zatrzymano ręcznie; automatyczne wznowienie wyłączono.")
-    return {"ok": True, "message": "Rozłączono"}
+    diagnostics.info("The connection was stopped manually; automatic resume disabled.")
+    return {"ok": True, "message": "Disconnected"}
 
 @app.post("/api/bridge/event")
 async def bridge_event(ev: TikTokEvent, x_giftstream_secret: str | None = Header(default=None)) -> dict:
@@ -1163,16 +1192,16 @@ async def browser_event(req: BrowserEventRequest, request: Request) -> dict[str,
     except ValueError:
         is_loopback = False
     if not is_loopback:
-        raise HTTPException(403, "Browser relay przyjmuje zdarzenia wyłącznie z tego komputera.")
+        raise HTTPException(403, "The browser relay accepts events only from this computer.")
     ev = req.event
     if ev.type == "system":
-        raise HTTPException(422, "Browser relay nie przyjmuje zdarzeń systemowych.")
+        raise HTTPException(422, "The browser relay does not accept system events.")
     if (len(ev.user) > 64 or len(ev.nickname) > 100 or len(ev.comment or "") > 1000
             or len(ev.gift_name or "") > 128 or len(ev.gift_image_url or "") > 2048
             or ev.repeat_count < 1 or ev.repeat_count > 1000
             or ev.like_count < 0 or ev.like_count > 10_000_000
             or ev.diamonds < 0 or ev.diamonds > 10_000_000):
-        raise HTTPException(422, "Zdarzenie z przeglądarki przekracza dozwolony rozmiar lub zakres.")
+        raise HTTPException(422, "The browser event exceeds the allowed size or range.")
     normalized = ev.model_copy(update={"source": "browser"})
     await process_event(normalized, trigger_actions=req.trigger_actions)
     return {"ok": True, "received": normalized.type,
@@ -1188,7 +1217,7 @@ async def browser_status(request: Request) -> dict[str, Any]:
     except ValueError:
         is_loopback = False
     if not is_loopback:
-        raise HTTPException(403, "Browser relay jest dostępny wyłącznie lokalnie.")
+        raise HTTPException(403, "The browser relay is available locally only.")
     return {"events_received": hub.browser_event_count,
             "last_event_at": hub.browser_last_event_at or None}
 

@@ -1,16 +1,16 @@
-"""Przycinanie i analiza dźwięków WAV bez zewnętrznych narzędzi.
+"""WAV trimming and analysis without external tools.
 
-GiftStream działa jako pojedynczy plik EXE, więc nie może zakładać ffmpeg-a
-ani bibliotek audio spoza standardowej biblioteki Pythona. Ten moduł obsługuje
-najczęstszy format bez kompresji (WAV/PCM: 8, 16, 24 i 32 bitów oraz float32).
+GiftStream ships as a single EXE, so it cannot rely on ffmpeg or any audio
+library outside the Python standard library. This module handles the most
+common uncompressed format (WAV/PCM: 8, 16, 24 and 32 bit plus float32).
 
-Do czego to służy:
-* ``wav_info`` — długość i parametry pliku (panel pokazuje, co wybrano),
-* ``trim_wav`` — wycięcie fragmentu z miękkim wejściem i wyjściem (fade),
-* ``wav_peaks`` — przebieg fali do rysowania w Studio dźwięków.
+What it is for:
+* ``wav_info`` — file duration and parameters (the panel shows the selection),
+* ``trim_wav`` — cutting a fragment with a soft fade in and out,
+* ``wav_peaks`` — waveform data for the Sound studio.
 
-Dźwięki w formatach skompresowanych (MP3, M4A, OGG, FLAC) przycinamy w
-przeglądarce, która potrafi je zdekodować (``AudioContext.decodeAudioData``),
+Compressed formats (MP3, M4A, OGG, FLAC) are trimmed in the browser, which
+can decode them (``AudioContext.decodeAudioData``),
 a wynik wraca do GiftStream jako gotowy WAV.
 """
 from __future__ import annotations
@@ -27,17 +27,17 @@ _EXTENSIBLE = 0xFFFE
 
 
 class AudioError(ValueError):
-    """Plik nie jest obsługiwanym dźwiękiem WAV."""
+    """The file is not a supported WAV sound."""
 
 
 def _scale(value: float, factor: float) -> float:
-    """Skaluje próbkę zachowując typ tablicy (``array`` nie przyjmuje floatów)."""
+    """Scales a sample while keeping the array type (``array`` rejects floats)."""
     return value * factor if isinstance(value, float) else int(round(value * factor))
 
 
 def _read_chunks(payload: bytes) -> tuple[dict, bytes]:
     if len(payload) < 12 or payload[:4] != b"RIFF" or payload[8:12] != b"WAVE":
-        raise AudioError("To nie jest plik WAV.")
+        raise AudioError("This is not a WAV file.")
     fmt: dict = {}
     data: bytes | None = None
     offset = 12
@@ -47,7 +47,7 @@ def _read_chunks(payload: bytes) -> tuple[dict, bytes]:
         body = payload[offset + 8:offset + 8 + size]
         if chunk_id == b"fmt ":
             if len(body) < 16:
-                raise AudioError("Nagłówek WAV jest niekompletny.")
+                raise AudioError("The WAV header is incomplete.")
             audio_format, channels, rate, _byte_rate, _align, bits = struct.unpack_from("<HHIIHH", body, 0)
             if audio_format == _EXTENSIBLE and len(body) >= 26:
                 audio_format = struct.unpack_from("<H", body, 24)[0]
@@ -56,23 +56,23 @@ def _read_chunks(payload: bytes) -> tuple[dict, bytes]:
             data = body
         offset += 8 + size + (size & 1)
     if not fmt or data is None:
-        raise AudioError("Plik WAV nie zawiera nagłówka formatu albo danych dźwiękowych.")
+        raise AudioError("The WAV file has no format header or no audio data.")
     if fmt["format"] == _FLOAT and fmt["bits"] != 32:
-        raise AudioError("Obsługiwany jest tylko 32-bitowy WAV zmiennoprzecinkowy.")
+        raise AudioError("Only 32-bit floating point WAV is supported.")
     if fmt["format"] not in (_PCM, _FLOAT):
-        raise AudioError("Obsługiwane są wyłącznie nieskompresowane pliki WAV (PCM).")
+        raise AudioError("Only uncompressed WAV (PCM) files are supported.")
     if fmt["format"] == _PCM and fmt["bits"] not in (8, 16, 24, 32):
-        raise AudioError("Obsługiwane są pliki WAV PCM 8, 16, 24 i 32 bity.")
+        raise AudioError("WAV PCM files with 8, 16, 24 and 32 bits are supported.")
     if not 1 <= fmt["channels"] <= 8:
-        raise AudioError("Liczba kanałów w pliku WAV jest nieobsługiwana.")
+        raise AudioError("The number of channels in the WAV file is not supported.")
     if not 4000 <= fmt["sample_rate"] <= 384000:
-        raise AudioError("Częstotliwość próbkowania w pliku WAV jest nieobsługiwana.")
+        raise AudioError("The sample rate of the WAV file is not supported.")
     fmt["data"] = data
     return fmt, data
 
 
 def _decode_samples(fmt: dict) -> array:
-    """Zwraca próbki jako ``array`` typu zgodnego z plikiem (bez 8-bitowego offsetu)."""
+    """Returns the samples as an ``array`` matching the file type (no 8-bit offset)."""
     data, bits, audio_format = fmt["data"], fmt["bits"], fmt["format"]
     if audio_format == _FLOAT:
         samples = array("f")
@@ -139,7 +139,7 @@ def _build_wav(samples: array, fmt: dict) -> bytes:
 
 
 def wav_info(payload: bytes) -> dict:
-    """Podstawowe informacje o pliku WAV (bez dekodowania całej zawartości)."""
+    """Basic WAV file information (without decoding the whole payload)."""
     fmt, data = _read_chunks(payload)
     block_align = max(1, fmt["channels"] * (4 if fmt["format"] == _FLOAT else max(1, fmt["bits"] // 8)))
     frames = len(data) // block_align
@@ -157,10 +157,10 @@ def wav_info(payload: bytes) -> dict:
 def trim_wav(payload: bytes, start: float = 0.0, end: float | None = None,
              fade_in_ms: int = 0, fade_out_ms: int = 0,
              max_seconds: float = MAX_CLIP_SECONDS) -> tuple[bytes, dict]:
-    """Wycina fragment pliku WAV i zwraca ``(nowy_plik, informacje)``.
+    """Cuts a WAV fragment and returns ``(new_file, info)``.
 
-    ``max_seconds`` ogranicza długość wyniku — alerty LIVE mają być krótkie,
-    więc dłuższy wybór jest automatycznie ucinany, zamiast blokować zapis.
+    ``max_seconds`` caps the result — LIVE alerts are meant to be short, so a
+    longer selection is trimmed automatically instead of blocking the save.
     """
     fmt, _data = _read_chunks(payload)
     info = wav_info(payload)
@@ -171,7 +171,7 @@ def trim_wav(payload: bytes, start: float = 0.0, end: float | None = None,
     start = max(0.0, min(float(start or 0.0), duration))
     end = duration if end is None else max(0.0, min(float(end), duration))
     if end - start < 0.05:
-        raise AudioError("Fragment jest za krótki — zaznacz co najmniej 0,05 sekundy.")
+        raise AudioError("The fragment is too short — select at least 0.05 seconds.")
     if max_seconds > 0 and end - start > max_seconds:
         end = start + max_seconds
 
@@ -203,7 +203,7 @@ def trim_wav(payload: bytes, start: float = 0.0, end: float | None = None,
 
 
 def wav_peaks(payload: bytes, buckets: int = 160) -> list[float]:
-    """Przebieg fali 0..1 do podglądu w panelu (nie zmienia pliku)."""
+    """Waveform 0..1 for the panel preview (does not change the file)."""
     fmt, _data = _read_chunks(payload)
     buckets = max(8, min(int(buckets), 1200))
     samples = _decode_samples(fmt)
@@ -224,7 +224,7 @@ def wav_peaks(payload: bytes, buckets: int = 160) -> list[float]:
 
 
 def wav_from_bytes(payload: bytes) -> bytes:
-    """Przepisuje WAV do 16-bitowego PCM (używane przy normalizacji zapisu)."""
+    """Rewrites WAV as 16-bit PCM (used when normalising the save)."""
     fmt, _data = _read_chunks(payload)
     samples = _decode_samples(fmt)
     scale = 32767 / max(1, (2 ** (fmt["bits"] - 1)) - 1) if fmt["format"] != _FLOAT else 32767

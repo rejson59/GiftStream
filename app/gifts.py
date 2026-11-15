@@ -1,8 +1,8 @@
-"""Lokalna biblioteka giftów: przykładowe wpisy + metadane z LIVE.
+"""Local gift library: sample entries + metadata from LIVE.
 
-Oryginalne grafiki nie są kopiowane ani hostowane przez GiftStream. Gdy
-TikTokLive zwróci adres CDN grafiki prezentu, zapisujemy adres źródłowy,
-aby można go użyć na nakładce OBS.
+Original artwork is never copied or hosted by GiftStream. When TikTokLive
+returns a gift artwork CDN URL, the source address is stored so the OBS
+overlay can use it.
 """
 from __future__ import annotations
 
@@ -17,10 +17,10 @@ from .models import GIFT_CATALOG, TikTokEvent
 from .paths import data_dir
 
 CACHE_PATH = data_dir() / "gift_catalog.json"
-LABEL_PL = {"Rose":"Róża", "Rosa":"Róża", "Dragon":"Smok", "Lion":"Lew",
+LABEL_PL = {"Rose":"Rose", "Rosa":"Rose", "Dragon":"Smok", "Lion":"Lew",
             "Doughnut":"Donut", "Donut":"Donut", "Ice Cream":"Lody",
-            "Finger Heart":"Serduszko z palców", "Sunglasses":"Okulary",
-            "Money Gun":"Pistolet na pieniądze", "TikTok Universe":"Wszechświat TikToka"}
+            "Finger Heart":"Finger Heart", "Sunglasses":"Okulary",
+            "Money Gun":"Money Gun", "TikTok Universe":"TikTok Universe"}
 
 # First entries are familiar, frequently used gifts. The local cache can retain a
 # broad current catalog; missing CDN art or coin fields must not hide a real gift.

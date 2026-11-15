@@ -77,10 +77,10 @@ class TikTokConnector:
         # Avoid a button click restarting an already connected/retrying client.
         if (mode == "tiktok" and self.mode == mode and self.username.casefold() == normalized_username.casefold()
                 and self._thread is not None and self._thread.is_alive() and not self._tt_stop.is_set()):
-            return {"ok": True, "mode": mode, "message": f"Połączenie z @{self.username} już działa lub ponawia próbę.", **self.status()}
+            return {"ok": True, "mode": mode, "message": f"The connection to @{self.username} is already running or retrying.", **self.status()}
         await self.stop()
         if self._thread is not None and self._thread.is_alive():
-            return {"ok": False, "message": "Poprzednia sesja TikTokLive nadal się zamyka. Poczekaj chwilę i sprawdź logi."}
+            return {"ok": False, "message": "The previous TikTokLive session is still closing. Wait a moment and check the logs."}
         self.mode = mode
         self.username = normalized_username
         self._stop = asyncio.Event()
@@ -134,7 +134,7 @@ class TikTokConnector:
                 elif connect_task is not None:
                     loop.call_soon_threadsafe(connect_task.cancel)
             except Exception as exc:
-                diagnostics.warning("Nie udało się zatrzymać zadania TikTokLive: %s", exc)
+                diagnostics.warning("Could not stop the TikTokLive task: %s", exc)
         if thread is not None and thread.is_alive():
             await asyncio.to_thread(thread.join, 8)
         elif client is not None and loop is not None and not loop.is_closed() and not loop.is_running():
@@ -146,7 +146,7 @@ class TikTokConnector:
                 )
                 loop.close()
             except Exception as exc:
-                diagnostics.warning("Zamykanie TikTokLive zakończyło się z błędem: %s", exc)
+                diagnostics.warning("Closing TikTokLive ended with an error: %s", exc)
         if thread is None or not thread.is_alive():
             self._thread = None
             self._tt_client = None
@@ -154,10 +154,10 @@ class TikTokConnector:
             self.connection_state = "disconnected"
             self.retry_in = 0.0
             if was_active:
-                diagnostics.info("Połączenie TikTok LIVE zostało zatrzymane przez użytkownika.")
+                diagnostics.info("The TikTok LIVE connection was stopped by the user.")
         else:
             self.connection_state = "stopping"
-            diagnostics.warning("TikTokLive nadal zamyka połączenie; nie uruchamiam drugiej sesji równolegle.")
+            diagnostics.warning("TikTokLive is still closing the connection; not starting a second session in parallel.")
 
     def status(self) -> dict:
         retry_in = max(0, round(self.retry_in - time.monotonic())) if self.retry_in else 0
@@ -180,16 +180,16 @@ class TikTokConnector:
             )
         except ImportError as exc:
             self.connection_state = "error"
-            self.last_error = "Brak biblioteki TikTokLive w tej instalacji."
-            diagnostics.error("Nie można połączyć z TikTok LIVE: biblioteka TikTokLive nie jest zainstalowana.", exc_info=exc)
+            self.last_error = "The TikTokLive library is not installed in this build."
+            diagnostics.error("Cannot connect to TikTok LIVE: the TikTokLive library is not installed.", exc_info=exc)
             return {"ok": False,
-                    "message": "Brak biblioteki TikTokLive. Zaktualizuj GiftStream albo zainstaluj TikTokLive."}
+                    "message": "The TikTokLive library is missing. Update GiftStream or install TikTokLive."}
 
         diagnostics.attach_logger("TikTokLive")
         client = TikTokLiveClient(unique_id=self.username)
         self._tt_client = client
         self.connection_state = "connecting"
-        diagnostics.info("Rozpoczynam połączenie TikTok LIVE z @%s.", self.username)
+        diagnostics.info("Starting the TikTok LIVE connection to @%s.", self.username)
         loop = asyncio.get_running_loop()
 
         def emit(ev: TikTokEvent) -> None:
@@ -200,7 +200,7 @@ class TikTokConnector:
                 try:
                     exc = done.exception()
                     if exc:
-                        diagnostics.error("Błąd przetwarzania zdarzenia TikTok LIVE: %s", exc, exc_info=exc)
+                        diagnostics.error("Error while processing a TikTok LIVE event: %s", exc, exc_info=exc)
                 except Exception:
                     pass
             future.add_done_callback(report_result)
@@ -212,7 +212,7 @@ class TikTokConnector:
             self.retry_attempt = 0
             self.retry_in = 0.0
             self.last_error = ""
-            diagnostics.info("Połączono z TikTok LIVE: @%s.", self.username)
+            diagnostics.info("Connected to TikTok LIVE: @%s.", self.username)
             # TikTokLive pobiera katalog przy fetch_gift_info=True przed startem streamu.
             try:
                 from .gifts import record_metadata
@@ -230,7 +230,7 @@ class TikTokConnector:
             self.connected = False
             if not self._tt_stop.is_set():
                 self.connection_state = "reconnecting"
-                diagnostics.warning("TikTok LIVE rozłączył websocket; konektor podejmie ponowną próbę.")
+                diagnostics.warning("TikTok LIVE closed the websocket; the connector will retry.")
 
         @client.on(GiftEvent)
         async def _on_gift(event):  # noqa: ANN001
@@ -336,11 +336,11 @@ class TikTokConnector:
                 try:
                     owned_loop.run_until_complete(_connect_once())
                     if not self._tt_stop.is_set():
-                        raise ConnectionError("TikTokLive zakończył pętlę websocket bez rozłączenia użytkownika.")
+                        raise ConnectionError("TikTokLive ended the websocket loop without a user disconnect.")
                 except asyncio.CancelledError:
                     self.connected = False
                     if not self._tt_stop.is_set():
-                        self.last_error = "Zadanie połączenia TikTok LIVE zostało nieoczekiwanie anulowane."
+                        self.last_error = "The TikTok LIVE connection task was cancelled unexpectedly."
                         self.connection_state = "reconnecting"
                         diagnostics.warning(self.last_error)
                 except Exception as exc:
@@ -351,10 +351,10 @@ class TikTokConnector:
                         user_offline = True
                         self.connection_state = "offline"
                         self.last_error = (
-                            f"Kanał @{self.username} jest obecnie offline. GiftStream będzie "
-                            "automatycznie sprawdzać transmisję co 2–5 minut."
+                            f"The channel @{self.username} is currently offline. GiftStream will "
+                            "check the stream automatically every 2–5 minutes."
                         )
-                        diagnostics.warning("TikTok LIVE potwierdził, że @%s jest offline; ponowię sprawdzenie później.",
+                        diagnostics.warning("TikTok LIVE confirmed that @%s is offline; the check will be repeated later.",
                                             self.username)
                     elif not self._tt_stop.is_set() and _is_signing_rate_limit(exc):
                         # This is an account-level signing quota, not a transient
@@ -362,18 +362,18 @@ class TikTokConnector:
                         # the rejected request and can consume more quota.
                         rate_limited = True
                         self.last_error = (
-                            "Serwer podpisujący EulerStream odrzucił połączenie z powodu limitu "
-                            "połączeń na godzinę (rate_limit_account_hour). Automatyczne próby "
-                            "wstrzymano. Skonfiguruj SIGN_API_KEY z EulerStream albo spróbuj "
+                            "The EulerStream signing server rejected the connection because of the "
+                            "hourly connection limit (rate_limit_account_hour). Automatic attempts "
+                            "were paused. Configure SIGN_API_KEY from EulerStream or try "
                             "ponownie po odnowieniu limitu."
                         )
                         self.connection_state = "error"
                         self.retry_in = 0.0
-                        diagnostics.error("%s Szczegóły odpowiedzi: %s", self.last_error, exc)
+                        diagnostics.error("%s Response details: %s", self.last_error, exc)
                     elif not self._tt_stop.is_set():
                         self.last_error = f"{type(exc).__name__}: {exc}"
                         self.connection_state = "reconnecting"
-                        diagnostics.error("Połączenie TikTok LIVE nie powiodło się: %s", self.last_error, exc_info=exc)
+                        diagnostics.error("The TikTok LIVE connection failed: %s", self.last_error, exc_info=exc)
                 finally:
                     self._tt_connect_task = None
                     if not owned_loop.is_closed() and not owned_loop.is_running():
@@ -381,7 +381,7 @@ class TikTokConnector:
                             owned_loop.run_until_complete(_disconnect_tiktok_client(client, close_http=False))
                         except Exception as cleanup_error:
                             if not self._tt_stop.is_set():
-                                diagnostics.warning("Sprzątanie sesji TikTokLive: %s", cleanup_error)
+                                diagnostics.warning("Cleaning up the TikTokLive session: %s", cleanup_error)
                 if self._tt_stop.is_set() or rate_limited:
                     break
                 self.retry_attempt += 1
@@ -389,10 +389,10 @@ class TikTokConnector:
                 self.retry_in = time.monotonic() + delay
                 if user_offline:
                     self.connection_state = "offline"
-                    diagnostics.info("Następne sprawdzenie statusu LIVE za około %s s.", round(delay))
+                    diagnostics.info("Next LIVE status check in about %s s.", round(delay))
                 else:
                     self.connection_state = "reconnecting"
-                    diagnostics.warning("Ponowna próba TikTok LIVE nr %s za około %s s.",
+                    diagnostics.warning("TikTok LIVE retry #%s in about %s s.",
                                         self.retry_attempt, round(delay))
                 self._tt_stop.wait(delay)
             self.connected = False
@@ -403,47 +403,47 @@ class TikTokConnector:
                 try:
                     owned_loop.run_until_complete(_disconnect_tiktok_client(client, close_http=True))
                 except Exception as cleanup_error:
-                    diagnostics.warning("Końcowe zamykanie sesji TikTokLive: %s", cleanup_error)
+                    diagnostics.warning("Final TikTokLive session closing: %s", cleanup_error)
                 finally:
                     owned_loop.close()
-            diagnostics.info("Zakończono wątek TikTokLive dla @%s.", self.username)
+            diagnostics.info("TikTokLive thread for @%s finished.", self.username)
 
         self.connection_state = "connecting"
         self._thread = threading.Thread(target=_run, name="GiftStream-TikTokLive", daemon=True)
         self._thread.start()
         return {"ok": True, "mode": "tiktok",
-                "message": f"Łączenie z @{self.username}. Bieżący stan i błędy są widoczne w logach."}
+                "message": f"Connecting to @{self.username}. The current state and errors are visible in the logs."}
 
     # ------------------------------------------------------------------
     # Managed API (TikTool / EulerStream) — adapter
     # ------------------------------------------------------------------
     async def _start_managed(self) -> dict:
-        """Płatne API: TikTool WebSocket (wss://api.tik.tools).
+        """Paid API: TikTool WebSocket (wss://api.tik.tools).
 
-        Wymaga klucza w .env: TIKTOOL_API_KEY. Jeśli klucz jest, łączymy
-        się przez WebSocket i mapujemy eventy na TikTokEvent.
-        Bez klucza zwracamy czytelną instrukcję zamiast generować nieprawdziwe zdarzenia.
+        Requires a key in .env: TIKTOOL_API_KEY. With the key we connect over a
+        WebSocket and map events to TikTokEvent. Without it we return a clear
+        instruction instead of generating fake events.
         """
         api_key = os.getenv("TIKTOOL_API_KEY", "")
         if not api_key:
             self.connection_state = "error"
-            self.last_error = "Brak TIKTOOL_API_KEY w .env."
+            self.last_error = "No TIKTOOL_API_KEY in .env."
             diagnostics.warning(self.last_error)
             return {"ok": False,
-                    "message": "Brak TIKTOOL_API_KEY w .env. Ustaw klucz albo połącz bezpośrednio TikTok LIVE."}
+                    "message": "No TIKTOOL_API_KEY in .env. Set the key or connect to TikTok LIVE directly."}
         if not self.username:
             return {"ok": False, "message": "Podaj @username streamera"}
         try:
             import websockets  # type: ignore
         except ImportError as exc:
             self.connection_state = "error"
-            self.last_error = "Brak pakietu websockets."
+            self.last_error = "The websockets package is missing."
             diagnostics.error(self.last_error, exc_info=exc)
-            return {"ok": False, "message": "Brak pakietu websockets"}
+            return {"ok": False, "message": "The websockets package is missing"}
         self._task = asyncio.create_task(self._managed_loop(api_key))
         self.connected = True
         self.connection_state = "connected"
-        diagnostics.info("Uruchomiono zewnętrzne API dla @%s.", self.username)
+        diagnostics.info("External API started for @%s.", self.username)
         return {"ok": True, "mode": "managed", "message": f"Managed API: @{self.username}"}
 
     async def _managed_loop(self, api_key: str) -> None:

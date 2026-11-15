@@ -44,7 +44,7 @@ def test_diagnostics_endpoints_return_and_clear_copyable_logs(monkeypatch):
     assert client.post("/api/logs/client", json={"source": "test", "message": "UI exception diagnostic"}).json()["ok"] is True
     assert any("UI exception diagnostic" in line for line in client.get("/api/logs").json()["lines"])
     assert client.get("/api/does-not-exist").status_code == 404
-    assert any("HTTP GET /api/does-not-exist zakończyło się statusem 404" in line
+    assert any("HTTP GET /api/does-not-exist finished with status 404" in line
                for line in client.get("/api/logs").json()["lines"])
     assert client.post("/api/logs/clear").json()["ok"] is True
 
@@ -139,7 +139,7 @@ def test_myinstants_search_endpoint_returns_results_and_caveat(monkeypatch):
     response = TestClient(main.app).get("/api/sounds/myinstants", params={"q": "hello"})
     assert response.status_code == 200
     assert response.json()["results"][0]["name"] == "hello"
-    assert "nieoficjalnego" in response.json()["notice"]
+    assert "unofficial" in response.json()["notice"]
 
 
 def test_non_parkour_presets_are_not_listed_or_activated():
@@ -167,7 +167,7 @@ def test_parkour_test_endpoint_accepts_new_actions_but_not_arbitrary_commands(mo
         raise RuntimeError("RCON password rejected")
 
     monkeypatch.setattr(main, "_run_parkour_action", fail_execution)
-    failed = client.post("/api/minecraft/parkour/action", json={"action": "parkour_speed"})
+    failed = client.post("/api/minecraft/parkour/action", json={"action": "parkour_slow"})
     assert failed.status_code == 502
     assert "RCON password rejected" in failed.json()["detail"]
     assert client.post("/api/minecraft/parkour/action", json={"action": "dropper_reset"}).status_code == 400
@@ -185,14 +185,14 @@ def test_parkour_test_action_requires_ready_server_and_online_player(monkeypatch
         "game_mode": "parkour", "server_dir": "local-server", "player": "Streamer"})
     client = TestClient(main.app)
     monkeypatch.setattr(main.parkour_server, "status", lambda: {"ready": False, "message": "Czekam na RCON"})
-    response = client.post("/api/minecraft/parkour/action", json={"action": "parkour_speed"})
+    response = client.post("/api/minecraft/parkour/action", json={"action": "parkour_slow"})
     assert response.status_code == 409
     assert "RCON" in response.json()["detail"]
 
     monkeypatch.setattr(main.parkour_server, "status", lambda: {"ready": True, "players": ["OtherPlayer"]})
-    response = client.post("/api/minecraft/parkour/action", json={"action": "parkour_speed"})
+    response = client.post("/api/minecraft/parkour/action", json={"action": "parkour_slow"})
     assert response.status_code == 409
-    assert "nie jest online" in response.json()["detail"]
+    assert "is not online" in response.json()["detail"]
 
 
 def test_supported_actions_are_limited_to_built_in_minecraft_modes():
@@ -200,11 +200,11 @@ def test_supported_actions_are_limited_to_built_in_minecraft_modes():
     assert response.status_code == 200
     assert {item["id"] for item in response.json()} == {
         "parkour_push", "parkour_level_forward", "parkour_level_back",
-        "parkour_jail", "parkour_reset", "parkour_antireset", "parkour_speed",
+        "parkour_jail", "parkour_reset", "parkour_antireset", "parkour_checkpoint",
         "parkour_slow", "parkour_blind", "parkour_jump", "parkour_shield", "parkour_cleanse",
         "dropper_push", "dropper_level_forward", "dropper_level_back", "dropper_reset",
-        "dropper_speed", "dropper_slow", "dropper_blind", "dropper_jump", "dropper_shield", "dropper_cleanse",
-        "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_night", "parkour_heart",
+        "dropper_slow", "dropper_blind", "dropper_jump", "dropper_shield", "dropper_cleanse",
+        "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_heart",
         "dropper_blackout", "dropper_lightning", "dropper_disco", "dropper_heart",
     }
 
@@ -303,11 +303,11 @@ def test_update_check_can_be_requested_and_reports_completion():
     assert client.get("/api/updates/status").json()["progress"] == 43
     second = client.post("/api/updates/check").json()
     assert second["check_id"] == first["check_id"]
-    update_state.finish_check("Masz najnowszą wersję.")
+    update_state.finish_check("You have the newest version.")
     status = client.get("/api/updates/status").json()
     assert status["checking"] is False
     assert status["last_checked"]
-    assert status["last_check_message"] == "Masz najnowszą wersję."
+    assert status["last_check_message"] == "You have the newest version."
     update_state.clear()
 
 
@@ -325,7 +325,7 @@ def test_update_ui_can_only_request_a_published_update(tmp_path):
     assert status["available"] is True
     assert status["tag"] == "v0.3.0"
     assert "GiftStream" in status["message"]
-    assert "automatycznie" in status["message"]
+    assert "restart" in status["message"]
     assert client.post("/api/updates/apply").json()["ok"] is True
     assert update_state.take_apply_request() == executable
     update_state.clear()
@@ -381,11 +381,11 @@ def test_rule_sound_url_requires_https_or_an_existing_local_upload(tmp_path, mon
     monkeypatch.setattr(main, "_SOUND_UPLOAD_DIR", tmp_path)
     monkeypatch.setattr(main, "_SOUND_FILE_RE", re.compile(r"^[0-9a-f]{32}\.mp3$"))
     main._validate_rule_sound_url("https://cdn.example.org/sound.mp3")
-    with pytest.raises(HTTPException, match="publicznym linkiem HTTPS"):
+    with pytest.raises(HTTPException, match="public HTTPS link"):
         main._validate_rule_sound_url("http://cdn.example.org/sound.mp3")
-    with pytest.raises(HTTPException, match="publicznym linkiem HTTPS"):
+    with pytest.raises(HTTPException, match="public HTTPS link"):
         main._validate_rule_sound_url("https://127.0.0.1/audio.mp3")
-    with pytest.raises(HTTPException, match="Nie znaleziono"):
+    with pytest.raises(HTTPException, match="No uploaded audio file"):
         main._validate_rule_sound_url("/api/sounds/uploads/0123456789abcdef0123456789abcdef.mp3")
     (tmp_path / "0123456789abcdef0123456789abcdef.mp3").write_bytes(b"audio")
     main._validate_rule_sound_url("/api/sounds/uploads/0123456789abcdef0123456789abcdef.mp3")
@@ -396,7 +396,7 @@ def test_rule_editor_has_searchable_gift_picker_and_audio_upload_controls():
     assert 'id="rule-gift-search"' in page
     assert 'role="listbox"' in page
     assert 'id="rule-sound-choice"' in page
-    assert 'value="custom">Własny link HTTPS / plik lokalny' in page
+    assert 'value="custom">Custom HTTPS link / local file' in page
     assert 'id="rule-sound-url"' in page
     assert 'id="sound-file"' in page
     assert 'id="upload-sound"' in page
@@ -404,13 +404,13 @@ def test_rule_editor_has_searchable_gift_picker_and_audio_upload_controls():
     assert 'data-sound-search="X-Cool Ultra Slowed"' in page
     assert page.count('data-sound-search=') == 11
     app_js = TestClient(main.app).get('/static/app.js').text
-    assert "lang:window.GiftStreamI18n?.getLang()||'pl'" in app_js
+    assert "lang:window.GiftStreamI18n?.getLang()||'en'" in app_js
     assert 'parkourStatusInFlight' in app_js
     assert 'request===parkourStatusSequence' in app_js
     assert 'MAX_SOUND_CLIP_SECONDS=12' in app_js
     assert TestClient(main.app).get('/static/i18n.js').status_code == 200
-    assert 'nic nie pobiera ani nie ustawia automatycznie' in page
-    assert 'cena nieudostępniona' in page
+    assert 'nothing is downloaded or selected automatically' in page
+    assert 'price unavailable' in page
     assert 'id="parkour-test-action"' in page
     assert 'id="parkour-test-button"' in page
     assert 'value="arena"' in page

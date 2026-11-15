@@ -167,7 +167,7 @@ class GiftStreamDesktop:
             manual_check = update_state.take_check_request()
             if manual_check or time.monotonic() >= next_check:
                 update_state.begin_check()
-                message = "Nie udało się sprawdzić aktualizacji. Spróbuj ponownie później."
+                message = "Could not check for updates. Try again later."
                 try:
                     tag, executable, updated, message = prepare_latest(
                         GITHUB_REPOSITORY, data_dir(), on_progress=update_state.report_progress
@@ -180,7 +180,7 @@ class GiftStreamDesktop:
                             return
                 except Exception as exc:
                     # Network trouble must never interrupt the running stream or UI.
-                    message = f"Nie udało się sprawdzić aktualizacji: {exc}"
+                    message = f"Could not check for updates: {exc}"
                 finally:
                     update_state.finish_check(message)
                 next_check = time.monotonic() + UPDATE_CHECK_SECONDS
@@ -224,7 +224,7 @@ class GiftStreamDesktop:
     def run(self) -> None:
         data_dir()
         if not self._wait_for_server():
-            raise RuntimeError("Nie udało się uruchomić lokalnego serwera GiftStream.")
+            raise RuntimeError("Could not start the local GiftStream server.")
 
         self.window = webview.create_window(
             "GiftStream",
@@ -253,7 +253,7 @@ class GiftStreamDesktop:
                     import ctypes
                     ctypes.windll.user32.MessageBoxW(
                         0,
-                        f"Nie udało się uruchomić okna GiftStream. Sprawdź, czy Microsoft Edge WebView2 jest dostępny w systemie.\n\n{exc}",
+                        f"Could not open the GiftStream window. Check that Microsoft Edge WebView2 is available on this system.\n\n{exc}",
                         "GiftStream",
                         0x10,
                     )

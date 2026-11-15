@@ -4,15 +4,15 @@ GiftStream plays a short alert for LIVE events, so every sound you pick ends up 
 
 ## Where it lives
 
-**Dźwięki i alerty → Przytnij dźwięk** (bottom of the "Wybrane brzmienie" panel).
+**Sounds & alerts → Trim a sound** (bottom of the "Selected sound" panel).
 
-1. Load a sound: drag a **WAV** into *Plik WAV do przycięcia*, or press **Przytnij wybrany dźwięk** to take whatever is currently selected in the Studio (including a MyInstants result).
+1. Load a sound: drag a **WAV** into *WAV file to trim*, or press **Trim the selected sound** to take whatever is currently selected in the Studio (including a MyInstants result).
 2. The waveform appears. Drag the green handles, drag the highlighted block, or type exact **start/end** values.
 3. *Fade in* / *Fade out* (milliseconds) soften the cut so the alert does not start or stop with a click.
-4. **▶ Odsłuchaj fragment** plays exactly the selected range with the fade applied.
-5. **Zapisz przycięty dźwięk** stores the clip and immediately sets it as the LIVE alert.
+4. **▶ Preview the fragment** plays exactly the selected range with the fade applied.
+5. **Save the trimmed sound** stores the clip and immediately sets it as the LIVE alert.
 
-Quick picks do the common jobs in one click: *Pierwsze 12 s*, *Pierwsze 8 s*, *Najgłośniejszy fragment* (the loudest 12 s window — handy for music), *Środek utworu*.
+Quick picks do the common jobs in one click: *First 12 s*, *First 8 s*, *Loudest fragment* (the loudest 12 s window — handy for music), *Middle of the track*.
 
 ## How each format is trimmed
 
@@ -29,7 +29,7 @@ Every clip you upload or trim is kept in `%LOCALAPPDATA%\GiftStream\uploads\soun
 
 ## Trimming a sound from a link
 
-Browsers cannot read audio bytes from another origin (CORS), so *Przytnij wybrany dźwięk* asks GiftStream to fetch the file first: `POST /api/sounds/fetch`. The download is deliberately strict:
+Browsers cannot read audio bytes from another origin (CORS), so *Trim the selected sound* asks GiftStream to fetch the file first: `POST /api/sounds/fetch`. The download is deliberately strict:
 
 - HTTPS only, no credentials in the URL,
 - hostname must not be localhost, `.local`, `.internal` or a private/loopback/link-local IP,

@@ -25,7 +25,7 @@ EVENTS_FILE = data_dir() / "events.jsonl"
 
 
 class Hub:
-    """Rozsyła eventy/akcje do wszystkich podłączonych klientów WS."""
+    """Broadcasts events/actions to all connected WS clients."""
 
     def __init__(self):
         self.game_clients: set[WebSocket] = set()
@@ -81,19 +81,19 @@ class Hub:
         data = ga.model_dump()
         action_id = uuid.uuid4().hex
         data.update({"action_id": action_id, "execution_status": "pending",
-                     "execution_message": "Dopasowano regułę; oczekiwanie na wynik wykonania.",
+                     "execution_message": "Rule matched; waiting for the execution result.",
                      "execution_updated_at": time.time()})
         self.recent_actions.append(data)
         self.recent_actions = self.recent_actions[-200:]
         await self._broadcast(self.feed_clients, {"kind": "action", "data": data})
         await self._broadcast(self.game_clients, {"kind": "action", "data": data})
-        # Bridge: UDP + plik (nieblokujące, best-effort)
+        # Bridge: UDP + file (non-blocking, best effort)
         asyncio.get_event_loop().run_in_executor(None, _udp_send, data)
         try:
             with EVENTS_FILE.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(data, ensure_ascii=False) + "\n")
         except Exception as exc:
-            diagnostics.warning("Nie udało się dopisać akcji do lokalnego dziennika JSONL: %s", exc)
+            diagnostics.warning("Could not append the action to the local JSONL log: %s", exc)
         return action_id
 
     async def update_action(self, action_id: str, status: str, message: str) -> None:
@@ -110,7 +110,7 @@ class Hub:
             with EVENTS_FILE.open("a", encoding="utf-8") as f:
                 f.write(json.dumps({"record_type": "action_status", **update}, ensure_ascii=False) + "\n")
         except Exception as exc:
-            diagnostics.warning("Nie udało się zapisać wyniku akcji do dziennika JSONL: %s", exc)
+            diagnostics.warning("Could not save the action result to the JSONL log: %s", exc)
 
     async def publish_status(self, status: dict) -> None:
         await self._broadcast(self.feed_clients, {"kind": "status", "data": status})
@@ -158,4 +158,4 @@ def _udp_send(payload: dict) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.sendto(json.dumps(payload, ensure_ascii=False).encode("utf-8"), (UDP_HOST, UDP_PORT))
     except Exception as exc:
-        diagnostics.warning("Nie udało się wysłać lokalnej akcji przez UDP bridge: %s", exc)
+        diagnostics.warning("Could not send the local action over the UDP bridge: %s", exc)

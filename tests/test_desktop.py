@@ -8,7 +8,7 @@ def test_downloaded_update_automatically_schedules_windows_restart(tmp_path, mon
     assert update_state.take_apply_request() == executable
     status = update_state.status()
     assert status["available"] is True
-    assert "ponownie" in status["message"]
+    assert "restart" in status["message"]
     update_state.clear()
 
 

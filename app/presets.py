@@ -14,7 +14,7 @@ PRESET_ID = "minecraft-parkour"  # Backward-compatible default preset id.
 
 def _path(preset_id: str = PRESET_ID) -> Path:
     if preset_id not in PRESET_IDS:
-        raise ValueError("Nieobsługiwany preset Minecraft.")
+        raise ValueError("Unsupported Minecraft preset.")
     return PRESETS_DIR / f"{preset_id}.json"
 
 
@@ -32,7 +32,7 @@ def get_preset(preset_id: str) -> Preset | None:
 
 def save_preset(preset: Preset) -> Preset:
     if preset.id not in PRESET_IDS:
-        raise ValueError("GiftStream udostępnia wyłącznie presety Minecraft Parkour i Dropper.")
+        raise ValueError("GiftStream only ships the Minecraft Parkour and Dropper presets.")
     PRESETS_DIR.mkdir(parents=True, exist_ok=True)
     path = _path(preset.id)
     temporary = path.with_suffix(".json.tmp")
