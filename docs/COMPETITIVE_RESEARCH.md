@@ -68,6 +68,25 @@ GiftStream currently has normalized gift/like/follow/comment/join/share/subscrib
 2. TTS phrase moderation and clearer per-viewer/role limits, with a local preview before enabling speech.
 3. A clearly marked event replay/test bench separated from real LIVE counters and earnings.
 4. Better per-event execution diagnostics (queue delay, dedup/source visibility, action result) without retaining comment contents unnecessarily.
+
+## Public TikTok LIVE game tooling review (November 2026)
+
+This is a review of public documentation and repository metadata—not decompilation, protocol interception, or copying another product's UI, assets, or implementation.
+
+- **TikFinity's public product page** models interaction as a legible `WHEN → THEN` rule, with a direct test control, gifts/likes/follows/comments as triggers, and overlays, goals, wheels, sounds, and game actions as outcomes. This validates GiftStream's rule editor and local action test, and suggests that the on-stream explanation of each rule should remain immediately readable. Source: [TikFinity](https://tikfinity.com/).
+- **NabeelFK/tiktok-live-minecraft-bridge** is an MIT-licensed public repository. Its README describes a normalized gift map feeding a rate-limited action queue, plus offline stdin test, JSONL record/replay, server command syntax verification, gift-catalog key/price checks, and a compact mobile overlay that visually distinguishes helping from sabotaging gifts. This is useful architectural evidence, not a benchmark or endorsement. Source: [repository](https://github.com/NabeelFK/tiktok-live-minecraft-bridge), [license](https://github.com/NabeelFK/tiktok-live-minecraft-bridge/blob/main/LICENSE).
+- **SmooGames TikTok Live Connector** publicly lists likes, comments, gifts, and a companion-app command editor. Its CurseForge listing says **All Rights Reserved**; we used only its published feature description and did not inspect, redistribute, or adapt its binary, code, or artwork. Source: [CurseForge listing](https://www.curseforge.com/minecraft/mc-mods/tiktok-live-connector).
+
+### Implemented from this review
+
+- **Help / sabotage chips in LIVE Arena:** built-in Parkour and Dropper actions now carry an explicit Polish or English label and color treatment on the portrait-friendly action cards. Help effects use green; disruptive effects use rose. Unknown or custom actions are not guessed or misclassified. This is a GiftStream-native adaptation of the general clarity pattern, not a copied layout.
+
+### Next evidence-led engineering steps
+
+1. Add a local event scenario bench that replays normalized fixture events through the real rule matcher while keeping LIVE counters, earnings, and Minecraft execution completely untouched by default; require an explicit opt-in for live-game tests.
+2. Serialize and rate-limit bursty Minecraft actions, expose bounded queue depth and result state, and define coalescing/priority semantics so a gift combo cannot flood RCON or block urgent cleanup/reset actions.
+3. Add safe, version-aware command validation against the actual local server without executing the proposed effect, then keep confirmation/testing separate from live execution.
+4. Validate action polarity in the built-in rules; the classification must be editable or omitted for custom rules rather than inferred from arbitrary rule names.
 5. Expand specific game mechanics through allowlisted actions, not arbitrary remote console execution.
 
 TikTok ingestion remains an unofficial client integration and needs ongoing compatibility checks against publicly observable behavior and current provider documentation.
