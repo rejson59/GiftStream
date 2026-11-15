@@ -1068,8 +1068,15 @@ def test_start_resets_the_world_before_launching_minecraft(tmp_path, monkeypatch
     server = ParkourServer()
     monkeypatch.setattr(server, "_rcon", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
     monkeypatch.setattr(ps, "ensure_java", lambda required: (Path("/usr/bin/java"), 21))
-    monkeypatch.setattr(ps.subprocess, "Popen", lambda *a, **k: order.append("start") or type(
-        "Proc", (), {"pid": 123, "poll": lambda self: None})())
+    class FakeProcess:
+        """Minimal stand-in for subprocess.Popen (Windows kills real handle tricks)."""
+        pid = 123
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(ps.subprocess, "Popen",
+                        lambda *a, **k: order.append("start") or FakeProcess())
     monkeypatch.setattr(ps, "_write_parkour_settings", lambda state: None)
 
     server._start_once()
