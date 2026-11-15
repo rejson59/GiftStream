@@ -636,6 +636,75 @@ def _extract_map(archive: Path, destination: Path) -> None:
                 shutil.copyfileobj(src, out)
 
 
+def _world_copy_signature(world: Path) -> str:
+    """Signature of the current world: the map plus any local edit keeps it stable."""
+    digest = hashlib.sha256(b"giftstream-map-reset-v1")
+    top_level = [world / "level.dat", world / "datapacks/main/pack.mcmeta"]
+    for path in top_level:
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"<missing>")
+    region_dir = world / "region"
+    if region_dir.is_dir():
+        for path in sorted(region_dir.glob("*.mca")):
+            digest.update(path.name.encode("utf-8"))
+            try:
+                digest.update(path.stat().st_mtime_ns.to_bytes(8, "little", signed=False))
+                digest.update(str(path.stat().st_size).encode("ascii"))
+            except OSError:
+                digest.update(b"<unreadable>")
+    return digest.hexdigest()
+
+
+def _archive_marker(marker: Path, signature: str) -> None:
+    try:
+        marker.write_text(json.dumps({"signature": signature, "map": MAP_FILENAME,
+                                      "written": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                                     indent=1), encoding="utf-8")
+    except OSError as exc:
+        diagnostics.warning("Could not write the map reset marker: %s", exc)
+
+
+def _replace_world_with_bundled_map(root: Path, backup_stage: Path) -> str:
+    """Install a pristine copy of the bundled map, replacing the current world.
+
+    Called on every start so a streamer can never face a world they changed by
+    accident (broken command blocks, a hole in the course, leftover jail blocks).
+    The new map is unpacked next to the world first; only then is it swapped in,
+    so an interrupted extraction leaves the old world untouched. Space is not
+    doubled: the previous world is deleted right after a successful swap.
+    """
+    world = root / "world"
+    staged = root / ".giftstream-world-stage"
+    shutil.rmtree(staged, ignore_errors=True)
+    staged.mkdir(parents=True, exist_ok=True)
+    try:
+        _extract_map(_map_archive(), staged)
+        _patch_map_datapack(staged)
+        if not (staged / "level.dat").is_file():
+            raise FileNotFoundError("The unpacked map has no level.dat.")
+    except Exception:
+        shutil.rmtree(staged, ignore_errors=True)
+        raise
+    previous = None
+    if world.exists():
+        previous = backup_stage
+        try:
+            os.replace(world, previous)
+        except OSError as exc:
+            diagnostics.warning("Could not move the old world aside (%s); replacing it directly.", exc)
+            shutil.rmtree(world, ignore_errors=True)
+            previous = None
+    os.replace(staged, world)
+    marker = root / ".giftstream-map-reset.json"
+    _archive_marker(marker, _world_copy_signature(world))
+    if previous is not None:
+        shutil.rmtree(previous, ignore_errors=True)
+    diagnostics.info("The bundled 100 Levels map was restored in %s before the server start.", world)
+    return _world_copy_signature(world)
+
+
 def _write_server_properties(path: Path, password: str) -> None:
     values = {
         "motd": "GiftStream · Parkour 100 Levels",
@@ -887,6 +956,32 @@ class ParkourServer:
         self.start()
         return self.status()
 
+    def reset_world(self) -> dict[str, Any]:
+        """Restore the bundled map on demand (the server has to be stopped first).
+
+        Every start already does this automatically; the endpoint exists so a
+        streamer can recover mid-session without hunting for the Run button.
+        """
+        state = self.settings()
+        if not state.get("server_dir"):
+            raise RuntimeError("Create the local Minecraft server first.")
+        if state.get("game_mode", "parkour") != "parkour":
+            raise RuntimeError("The map reset only applies to the Parkour mode.")
+        if self._process is not None and self._process.poll() is None:
+            raise RuntimeError("Stop the Minecraft server before resetting the map.")
+        try:
+            self._rcon("list", log_failure=False)
+        except Exception:
+            pass
+        else:
+            raise RuntimeError("Stop the Minecraft server before resetting the map.")
+        root = Path(str(state["server_dir"]))
+        backup = root / f".giftstream-world-before-reset-{int(time.time())}"
+        state["world_reset_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        state["world_reset_signature"] = _replace_world_with_bundled_map(root, backup)
+        self.save_settings(state)
+        return {**self.status(), "message": "The 100 Levels map was restored from the bundled copy."}
+
     def start(self) -> dict[str, Any]:
         # Serialize startup requests so rapid clicks/API retries cannot spawn two JVMs.
         with _START_LOCK:
@@ -913,11 +1008,19 @@ class ParkourServer:
         except Exception:
             pass
         if state.get("game_mode", "parkour") == "parkour":
+            # Every start begins on a pristine copy of the bundled map: a streamer who
+            # changed something (or a session that left blocks behind) can never end up
+            # with a broken course. The previous world is kept until the new one is in
+            # place, so an interrupted reset cannot destroy the installation.
+            previous = root / f".giftstream-world-before-reset-{int(time.time())}"
             try:
-                _patch_map_datapack(root / "world")
+                state["world_reset_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                state["world_reset_signature"] = _replace_world_with_bundled_map(root, previous)
+                _write_parkour_settings(state)
             except Exception as exc:
-                diagnostics.error("Could not prepare the 100 Levels datapack before the start: %s", exc, exc_info=exc)
-                raise RuntimeError(f"Could not prepare the 100 Levels map: {exc}") from exc
+                diagnostics.error("Could not restore the 100 Levels map before the start: %s",
+                                  exc, exc_info=exc)
+                raise RuntimeError(f"Could not restore the 100 Levels map: {exc}") from exc
         try:
             required_java = int(state.get("java_required") or 0)
             if required_java < 1:
@@ -1036,6 +1139,8 @@ class ParkourServer:
                     "java_required": state.get("java_required"),
                     "security_warning": "Offline mode does not verify Microsoft accounts. The server is meant for local connections only — do not expose ports 25565/25575 to the internet.",
                     "chat_relay_enabled": bool(state.get("chat_relay_enabled", False)),
+                    "world_reset_at": state.get("world_reset_at"),
+                    "world_reset_on_start": True,
                     "players_online": 0, "players": [], **client_info,
                     "message": "The server is starting — the first launch may take a moment."}
         if self._process is not None and self._process.poll() is not None:

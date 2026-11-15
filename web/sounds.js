@@ -184,7 +184,7 @@
         body: JSON.stringify({ url, name: config.sound_label || '' }),
       });
       await loadUrl(fetched.url, fetched.name);
-      setStatus(`Pobrano „${fetched.name}” (${fmt(trim.duration)}) — wybierz fragment.`);
+      setStatus(`Pobrano „${fetched.name}” (${fmt(trim.duration)}) — pick a fragment.`);
     } catch (error) {
       setStatus(error.message || 'Could not prepare the sound for trimming.');
     } finally {

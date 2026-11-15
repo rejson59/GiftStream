@@ -27,6 +27,10 @@ When the server is ready, join from Minecraft Multiplayer using **`localhost:255
 
 The bundled 100 Levels map was prepared for Minecraft **26.2**. Its `training_mode/glint/disable` and `enable` item modifier files use a JSON array that Minecraft **26.3** rejects; setup now safely converts those two known one-element resources to the expected typed object format (`type: minecraft:set_components`) before launching. This fixes the reported datapack-load failure, but does not certify every map mechanic on every later Minecraft release. If the server exits during startup, GiftStream reports it as stopped/not ready rather than RCON-ready. Stop is safe to repeat when the process has already exited or RCON is unavailable because the server is gone. The launcher checks the server download's hash and never overwrites a non-empty version folder. First-time setup can take longer because GiftStream may need to download the server JAR or install a compatible Java runtime; later starts reuse both. During JVM world/registry warm-up, the dashboard now reports “Minecraft is loading the world and registries…” instead of repeatedly opening RCON connections, and the server uses a smaller initial heap to reduce memory pressure on launch.
 
+## Map reset on every start
+
+Every start of the local server restores the bundled 100 Levels map: the world folder is replaced by a freshly unpacked copy of the map that ships with GiftStream, and the previous world is removed only after the new one is in place. This keeps a stream safe from accidental edits (a broken command block, a hole in the course, blocks left behind by a cage or a test) without any extra action. The dashboard shows the last reset time next to the server status, and the **Reset map** button repeats the reset on demand — it refuses to run while the server is still up, because Minecraft holds the region files open.
+
 ## Preset and coin prices
 
 The built-in **Parkour** preset maps:

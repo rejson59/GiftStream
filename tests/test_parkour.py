@@ -992,3 +992,124 @@ def test_checkpoints_are_unique_and_walkable_step_by_step():
             assert 150 < distance < 260
         else:
             assert distance < 120, (level, distance)
+
+
+def test_every_start_restores_the_bundled_map(tmp_path, monkeypatch):
+    """A world edited during a stream is replaced by a fresh copy of the map."""
+    from app import parkour_server as ps
+
+    server_dir = tmp_path / "server"
+    (server_dir / "world").mkdir(parents=True)
+    (server_dir / "world" / "level.dat").write_bytes(b"edited by the streamer")
+    monkeypatch.setattr(ps, "_map_archive", lambda: Path(MAP_FILENAME))
+    calls = []
+    monkeypatch.setattr(ps, "_extract_map", lambda archive, destination: (
+        calls.append(archive.name),
+        (destination / "level.dat").write_bytes(b"pristine map"),
+        (destination / "region").mkdir(),
+    ) and None)
+    monkeypatch.setattr(ps, "_patch_map_datapack", lambda world: None)
+
+    signature = ps._replace_world_with_bundled_map(server_dir, server_dir / ".backup")
+    assert calls == [MAP_FILENAME]
+    assert (server_dir / "world" / "level.dat").read_bytes() == b"pristine map"
+    assert signature
+    # No copy of the old world is left behind, so the reset does not double the disk usage.
+    assert not any(path.name.startswith(".giftstream-world-before-reset")
+                   for path in server_dir.iterdir())
+    assert not (server_dir / ".giftstream-world-stage").exists()
+    marker = json.loads((server_dir / ".giftstream-map-reset.json").read_text())
+    assert marker["map"] == MAP_FILENAME and marker["signature"] == signature
+
+
+def test_a_failed_map_reset_keeps_the_existing_world(tmp_path, monkeypatch):
+    """A broken archive must never destroy the world the player already has."""
+    from app import parkour_server as ps
+
+    server_dir = tmp_path / "server"
+    (server_dir / "world").mkdir(parents=True)
+    (server_dir / "world" / "level.dat").write_bytes(b"my world")
+    monkeypatch.setattr(ps, "_map_archive", lambda: Path(MAP_FILENAME))
+
+    def broken(archive, destination):
+        (destination / "partial.bin").write_bytes(b"half")
+        raise ValueError("The map archive exceeds the allowed size.")
+
+    monkeypatch.setattr(ps, "_extract_map", broken)
+    with pytest.raises(ValueError, match="exceeds"):
+        ps._replace_world_with_bundled_map(server_dir, server_dir / ".backup")
+    assert (server_dir / "world" / "level.dat").read_bytes() == b"my world"
+    assert not (server_dir / ".giftstream-world-stage").exists()
+
+
+def test_start_resets_the_world_before_launching_minecraft(tmp_path, monkeypatch):
+    from app import parkour_server as ps
+
+    settings_path = tmp_path / "settings.json"
+    server_dir = tmp_path / "server"
+    (server_dir / "world").mkdir(parents=True)
+    (server_dir / "world" / "level.dat").write_bytes(b"old")
+    (server_dir / "server.jar").write_bytes(b"jar")
+    (server_dir / "eula.txt").write_text("eula=true\n")
+    (server_dir / "server.properties").write_text("white-list=false\n")
+    settings_path.write_text(json.dumps({
+        "server_dir": str(server_dir), "player": "Streamer", "game_mode": "parkour",
+        "minecraft_version": "26.2", "rcon_password": "secret", "rcon_host": "127.0.0.1",
+        "rcon_port": 25575, "java_required": 21,
+    }))
+    monkeypatch.setattr(ps, "SETTINGS_PATH", settings_path)
+    order = []
+
+    def fake_swap(root, backup):
+        order.append("reset")
+        return "signature"
+
+    monkeypatch.setattr(ps, "_replace_world_with_bundled_map", fake_swap)
+    server = ParkourServer()
+    monkeypatch.setattr(server, "_rcon", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    monkeypatch.setattr(ps, "ensure_java", lambda required: (Path("/usr/bin/java"), 21))
+    monkeypatch.setattr(ps.subprocess, "Popen", lambda *a, **k: order.append("start") or type(
+        "Proc", (), {"pid": 123, "poll": lambda self: None})())
+    monkeypatch.setattr(ps, "_write_parkour_settings", lambda state: None)
+
+    server._start_once()
+    assert order == ["reset", "start"]
+
+
+def test_manual_map_reset_refuses_to_touch_a_running_server(tmp_path, monkeypatch):
+    from app import parkour_server as ps
+
+    settings_path = tmp_path / "settings.json"
+    server_dir = tmp_path / "server"
+    (server_dir / "world").mkdir(parents=True)
+    (server_dir / "world" / "level.dat").write_bytes(b"live")
+    settings_path.write_text(json.dumps({"server_dir": str(server_dir), "game_mode": "parkour",
+                                         "rcon_password": "secret", "rcon_host": "127.0.0.1",
+                                         "rcon_port": 25575}))
+    monkeypatch.setattr(ps, "SETTINGS_PATH", settings_path)
+    server = ParkourServer()
+    # A reachable RCON means Minecraft is still running and holds the region files.
+    monkeypatch.setattr(server, "_rcon", lambda *a, **k: "There are 1 of a max of 8 players online:")
+    with pytest.raises(RuntimeError, match="Stop the Minecraft server"):
+        server.reset_world()
+    assert (server_dir / "world" / "level.dat").read_bytes() == b"live"
+
+
+def test_manual_map_reset_replaces_the_world_when_stopped(tmp_path, monkeypatch):
+    from app import parkour_server as ps
+
+    settings_path = tmp_path / "settings.json"
+    server_dir = tmp_path / "server"
+    (server_dir / "world").mkdir(parents=True)
+    (server_dir / "world" / "level.dat").write_bytes(b"live")
+    settings_path.write_text(json.dumps({"server_dir": str(server_dir), "game_mode": "parkour",
+                                         "rcon_password": "secret", "rcon_host": "127.0.0.1",
+                                         "rcon_port": 25575}))
+    monkeypatch.setattr(ps, "SETTINGS_PATH", settings_path)
+    server = ParkourServer()
+    monkeypatch.setattr(server, "_rcon", lambda *a, **k: (_ for _ in ()).throw(OSError("gone")))
+    monkeypatch.setattr(server, "status", lambda: {"ready": False})
+    monkeypatch.setattr(ps, "_replace_world_with_bundled_map", lambda root, backup: "sig")
+    result = server.reset_world()
+    assert result["message"] == "The 100 Levels map was restored from the bundled copy."
+    assert json.loads(settings_path.read_text())["world_reset_signature"] == "sig"

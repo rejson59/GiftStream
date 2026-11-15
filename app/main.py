@@ -971,6 +971,14 @@ async def parkour_start() -> dict[str, Any]:
         diagnostics.error("Could not start the Minecraft server through the API: %s", exc, exc_info=exc)
         raise HTTPException(400, str(exc)) from exc
 
+@app.post("/api/minecraft/parkour/reset-map")
+async def parkour_reset_map() -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(parkour_server.reset_world)
+    except Exception as exc:
+        diagnostics.warning("Could not reset the Minecraft map through the API: %s", exc)
+        raise HTTPException(400, str(exc)) from exc
+
 @app.post("/api/minecraft/parkour/stop")
 async def parkour_stop() -> dict[str, Any]:
     try:
