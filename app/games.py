@@ -15,6 +15,16 @@ def _rule(rule_id: str, name: str, trigger: dict, action: dict, alert: str = "",
     }
 
 
+def _wow_rule(rule_id: str, name: str, trigger: dict, action: dict, alert: str,
+              cooldown: float = 0, once: bool = False) -> dict:
+    """Dodatkowe akcje „wow” — bez wymuszania ceny, z cooldownem, żeby nie spamować."""
+    rule = _rule(rule_id, name, trigger, action, alert)
+    rule["cooldown_sec"] = cooldown
+    if once:
+        rule["first_time_only"] = True
+    return rule
+
+
 GAMES = [
     {
         "id": "minecraft-parkour",
@@ -31,6 +41,7 @@ GAMES = [
             "Ice Cream · 30–999 monet → poprzedni poziom",
             "Castle · 1000+ monet → reset",
             "Lion · 1000+ monet → anty-reset",
+            "1000 tapów → ciemność, follow → owacja",
         ],
         "preset_id": "minecraft-parkour",
         "rules": [
@@ -40,6 +51,16 @@ GAMES = [
             _rule("mp-follow", "Follow → więzienie na 20 s", {"type": "follow"}, {"type": "parkour_jail"}, "🔒 Do więzienia!"),
             _rule("mp-reset", "Castle · 1000+ monet → reset za 60 s", {"type": "gift", "gift_name": "Castle", "min_coins": 1000}, {"type": "parkour_reset"}, "🏰 Reset za 60 sekund!", True),
             _rule("mp-antireset", "Lion · 1000+ monet → anty-reset", {"type": "gift", "gift_name": "Lion", "min_coins": 1000}, {"type": "parkour_antireset"}, "🦁 Reset uratowany!", True),
+            # Eventy „wow”: ciemność za 1000 tapów, follow, udostępnienie, komentarz
+            _wow_rule("mp-darkness", "1000 tapów → ciemność 15 s",
+                      {"type": "like", "like_threshold": 1000, "like_global": True},
+                      {"type": "parkour_blackout"}, "🌑 1000 tapów — gasną światła!", cooldown=30),
+            _wow_rule("mp-follow-heart", "Follow → serduszko + owacja",
+                      {"type": "follow"}, {"type": "parkour_heart"}, "💚 Dziękujemy za obserwację!", once=True),
+            _wow_rule("mp-share-lightning", "Udostępnienie → piorun",
+                      {"type": "share"}, {"type": "parkour_lightning"}, "⚡ Piorun za udostępnienie!", cooldown=20),
+            _wow_rule("mp-disco", "Komentarz „disco” → disco",
+                      {"type": "comment", "keyword": "disco"}, {"type": "parkour_disco"}, "🪩 DISCO!", cooldown=45),
         ],
     },
     {
@@ -58,6 +79,13 @@ GAMES = [
             _rule("md-forward", "Donut → wyższy poziom", {"type": "gift", "gift_name": "Donut"}, {"type": "dropper_level_forward"}, "🍩 Wyższy szyb!"),
             _rule("md-back", "Ice Cream → niższy poziom", {"type": "gift", "gift_name": "Ice Cream"}, {"type": "dropper_level_back"}, "↩ Niższy szyb!"),
             _rule("md-reset", "Castle → powrót na start", {"type": "gift", "gift_name": "Castle"}, {"type": "dropper_reset"}, "🏰 Powrót na górę!", True),
+            _wow_rule("md-darkness", "1000 tapów → ciemność 15 s",
+                      {"type": "like", "like_threshold": 1000, "like_global": True},
+                      {"type": "dropper_blackout"}, "🌑 1000 tapów — gasną światła!", cooldown=30),
+            _wow_rule("md-share-lightning", "Udostępnienie → piorun",
+                      {"type": "share"}, {"type": "dropper_lightning"}, "⚡ Piorun za udostępnienie!", cooldown=20),
+            _wow_rule("md-disco", "Komentarz „disco” → disco",
+                      {"type": "comment", "keyword": "disco"}, {"type": "dropper_disco"}, "🪩 DISCO!", cooldown=45),
             _rule("md-follow", "Follow → spowolnienie", {"type": "follow"}, {"type": "dropper_slow"}, "🐢 Spowolnienie w locie!"),
             _rule("md-jump", "Panda → wysoki skok", {"type": "gift", "gift_name": "Panda"}, {"type": "dropper_jump"}, "⬆ Wysoki skok!"),
         ],

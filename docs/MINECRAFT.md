@@ -40,6 +40,18 @@ The built-in **Parkour** preset maps:
 
 The rule editor also offers six timed audience effects: **Sprint** (speed for 8 s), **Slow** (slowness for 7 s), **Darkness** (4 s), **High jump** (jump boost plus slow falling), **Shield** (resistance for 6 s), and **Cleanse** (clears selected negative effects without removing other buffs). They affect only the configured local player and expire automatically. Assign any gift/event to these actions in **Reguły Parkour**. In the Minecraft panel, start the server, enable Parkour control, then use **Testuj akcję** to try an effect locally without waiting for a LIVE event.
 
+### Audience "wow" actions (0.19.0)
+
+Five extra actions are available for both Parkour and Dropper, and the built-in presets already use them:
+
+- **Blackout** (`parkour_blackout` / `dropper_blackout`) — `darkness` + `blindness` for 15 s plus midnight, so the screen is genuinely almost black; used by the default **1,000 taps → blackout** rule.
+- **Lightning** (`*_lightning`) — a single lightning bolt on the runner; used by the default **share → lightning** rule (20 s cooldown).
+- **Disco** (`*_disco`) — end-rod and note particles; used by the default **comment "disco"** rule (45 s cooldown).
+- **Heart ovation** (`*_heart`) — heart/happy-villager particles, a short speed boost and a thank-you action bar; used by the default **follow → heart** rule.
+- **Night** (`parkour_night`) — sets midnight on the map.
+
+The 1,000-like rule counts likes from **all viewers at once**: enable **Licz ze wszystkich widzów** in the rule editor (field `like_global`) and the counter is shared, with the overflow kept for the next threshold. Leave it off to keep the older per-rule counter. Rule order in the editor is editable — drag the `⠿` handle or use the ↑/↓ buttons — and is stored in the preset.
+
 Rules can be edited in GiftStream. Coin thresholds use only an explicit coin price from TikTok's gift catalog. If a catalog entry exposes only `diamond_count` or has no verified coin price, the coin-based rule will not fire for that gift. TikTok gift catalog data and prices can vary by region.
 
 ## Transparent LIVE Arena overlay

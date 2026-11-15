@@ -1,3 +1,3 @@
 """Application version for source runs; update both values for a new release."""
-VERSION = "0.18.6"
+VERSION = "0.19.0"
 RELEASE_TAG = f"v{VERSION}"

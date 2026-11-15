@@ -29,7 +29,7 @@ from .engine import Engine
 from .gifts import coin_price_for_gift, list_gifts, record_event, refresh_tiktok_catalog
 from .games import get_game
 from .parkour_server import ParkourServer, minecraft_versions
-from .models import AppConfig, GameAction, Preset, TikTokEvent
+from .models import AppConfig, GameAction, Preset, Rule, TikTokEvent
 from .paths import bundle_root, data_dir, installed_release_tag
 from .tiktok_connector import TikTokConnector
 from .version import VERSION
@@ -363,6 +363,38 @@ def _migrate_builtin_parkour_preset() -> bool:
     return True
 
 
+WOW_RULE_PREFIXES = ("mp-", "md-")
+WOW_RULE_IDS = {
+    "mp-darkness", "mp-follow-heart", "mp-share-lightning", "mp-disco",
+    "md-darkness", "md-share-lightning", "md-disco",
+}
+
+
+def _add_missing_wow_rules() -> list[str]:
+    """Dopisuje nowe reguły „wow” do już zapisanych presetów (0.19.0).
+
+    Aktualizacja nie może skasować reguł ustawionych przez streamera, więc
+    dokładamy wyłącznie brakujące identyfikatory na końcu listy — istniejąca
+    kolejność i ceny pozostają nietknięte.
+    """
+    added: list[str] = []
+    for game_id in ("minecraft-parkour", "minecraft-dropper"):
+        game = get_game(game_id)
+        saved = preset_store.get_preset(game["preset_id"]) if game else None
+        if not game or saved is None:
+            continue
+        known = {rule.id for rule in saved.rules}
+        missing = [rule for rule in game["rules"]
+                   if rule["id"] in WOW_RULE_IDS and rule["id"] not in known]
+        if not missing:
+            continue
+        saved.rules.extend(Rule(**rule) for rule in missing)
+        preset_store.save_preset(saved)
+        added.extend(rule["id"] for rule in missing)
+        diagnostics.info("Dodano %d reguł „wow” do presetu '%s'.", len(missing), saved.name)
+    return added
+
+
 @app.on_event("startup")
 async def startup() -> None:
     global config, _catalog_refresh_task, _catalog_refresh_started, _currency_refresh_task, _gift_refresh_loop_task
@@ -382,6 +414,7 @@ async def startup() -> None:
             preset_store.save_preset(Preset(id=game["preset_id"], name=game["title"],
                                             description=game["description"], rules=game["rules"]))
     _migrate_builtin_parkour_preset()
+    _add_missing_wow_rules()
     if config.active_preset_id not in preset_store.PRESET_IDS:
         config.active_preset_id = "minecraft-parkour"
         save_config()
@@ -835,6 +868,15 @@ async def actions() -> list[dict]:
         "dropper_jump": "Dropper: wysoki skok",
         "dropper_shield": "Dropper: tarcza · 6 s",
         "dropper_cleanse": "Dropper: usuń negatywne efekty",
+        "parkour_blackout": "Parkour: ciemność 15 s (ledwo widać)",
+        "parkour_lightning": "Parkour: piorun",
+        "parkour_disco": "Parkour: disco",
+        "parkour_night": "Parkour: noc",
+        "parkour_heart": "Parkour: serduszko + owacja (follow)",
+        "dropper_blackout": "Dropper: ciemność 15 s (ledwo widać)",
+        "dropper_lightning": "Dropper: piorun",
+        "dropper_disco": "Dropper: disco",
+        "dropper_heart": "Dropper: serduszko + owacja (follow)",
     }
     return [{"id": action, "label": labels[action]} for action in KNOWN_ACTIONS]
 

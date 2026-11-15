@@ -98,3 +98,18 @@ body{background:radial-gradient(ellipse at 84% 0%,#17524a32,transparent 29%),rad
 /* GiftStream brand mark replaces the former generic sparkle glyph. */
 .hero-spark{width:16px;height:16px;object-fit:contain}.brand-inline-icon{display:block;width:13px;height:13px;object-fit:contain}.footer-brand-icon{width:12px;height:12px;object-fit:contain;vertical-align:middle}.feed-icon img{display:block;width:15px;height:15px;object-fit:contain}
 .bottom-grid{grid-template-columns:1fr}.tiny-action.test{display:none}
+
+/* Kolejność reguł: uchwyt, numer, drag & drop (nowe) */
+.rule-card{grid-template-columns:26px 34px minmax(100px,1fr) minmax(100px,1fr) auto;gap:10px;transition:background .15s,border-color .15s}
+.rule-card.dragging{opacity:.45}
+.rule-card.drop-target{background:#1b2016;box-shadow:inset 3px 0 0 var(--lime)}
+.rule-order{display:flex;flex-direction:column;align-items:center;gap:2px;color:#5c5c64;user-select:none}
+.rule-grip{cursor:grab;font-size:13px;line-height:1;letter-spacing:-1px}
+.rule-pos{font:9px var(--mono);color:#6f7681}
+.tiny-action.move{padding:3px 6px;font-size:9px;line-height:1}
+.tiny-action[disabled]{opacity:.32;cursor:not-allowed}
+@media(max-width:520px){.rule-order{display:none}.rule-card{grid-template-columns:31px 1fr auto!important}}
+
+/* Próg polubień ze wszystkich widzów */
+.rule-global-likes{margin:8px 0 0;align-items:flex-start}
+.rule-global-likes small{font-size:10px;line-height:1.5;color:var(--muted);display:block}

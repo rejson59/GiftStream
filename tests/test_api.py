@@ -204,6 +204,8 @@ def test_supported_actions_are_limited_to_built_in_minecraft_modes():
         "parkour_slow", "parkour_blind", "parkour_jump", "parkour_shield", "parkour_cleanse",
         "dropper_push", "dropper_level_forward", "dropper_level_back", "dropper_reset",
         "dropper_speed", "dropper_slow", "dropper_blind", "dropper_jump", "dropper_shield", "dropper_cleanse",
+        "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_night", "parkour_heart",
+        "dropper_blackout", "dropper_lightning", "dropper_disco", "dropper_heart",
     }
 
 

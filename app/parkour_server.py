@@ -1268,6 +1268,32 @@ class ParkourServer:
             f'weapon:{{id:"minecraft:bow",count:1,components:{{"minecraft:enchantments":{enchantments}}}}}}}'
         )
 
+    @staticmethod
+    def _heart_commands(player: str) -> list[str]:
+        """Follow → serduszko i owacja: cząsteczki + krótkie, bezpieczne wzmocnienie."""
+        return [
+            f"execute at {player} run particle minecraft:heart ~ ~2 ~ 1.2 1 1.2 0.05 40 force",
+            f"execute at {player} run particle minecraft:happy_villager ~ ~2 ~ 1 1 1 0.05 30 force",
+            f"effect give {player} minecraft:speed 10 1 true",
+            f"title {player} actionbar {json.dumps({'text': 'DZIĘKUJEMY ZA OBSERWACJĘ!', 'color': 'light_purple', 'bold': True}, ensure_ascii=False, separators=(',', ':'))}",
+        ]
+
+    @staticmethod
+    def _blackout_commands(player: str, seconds: int = 15) -> list[str]:
+        """„Ciemność, że ledwo co widać” — darkness + blindness + noc.
+
+        Sam efekt darkness przygasza ekran, ale przy jasnym otoczeniu mapa dalej
+        jest czytelna. Blindness odcina widok do kilku kratek, a noc zabiera
+        światło mapy, więc efekt naprawdę robi wrażenie na transmisji.
+        """
+        seconds = max(3, min(int(seconds), 120))
+        return [
+            f"effect give {player} minecraft:darkness {seconds} 0 true",
+            f"effect give {player} minecraft:blindness {seconds} 0 true",
+            "time set midnight",
+            f"title {player} actionbar {json.dumps({'text': 'CIEMNOŚĆ ' + str(seconds) + ' s', 'color': 'dark_purple', 'bold': True}, ensure_ascii=False, separators=(',', ':'))}",
+        ]
+
     def execute_action(self, action: str, player: str | None = None) -> str:
         state = self.settings()
         player = player or str(state.get("player", ""))
@@ -1302,6 +1328,11 @@ class ParkourServer:
                 "dropper_speed": ([f"effect give {player} minecraft:speed 8 1 true"], "Sprint przez 8 sekund!"),
                 "dropper_slow": ([f"effect give {player} minecraft:slowness 7 1 true"], "Spowolnienie przez 7 sekund!"),
                 "dropper_blind": ([f"effect give {player} minecraft:darkness 4 0 true"], "Ciemność przez 4 sekundy!"),
+                "dropper_blackout": (self._blackout_commands(player, 15), "Ciemność: ledwo co widać przez 15 sekund!"),
+                "dropper_lightning": ([f"execute at {player} run summon minecraft:lightning_bolt ~ ~ ~"], "Piorun w gracza!"),
+                "dropper_disco": ([f"execute at {player} run particle minecraft:end_rod ~ ~2 ~ 1.5 1 1.5 0.2 120 force",
+                                   f"execute at {player} run particle minecraft:note ~ ~2 ~ 1 1 1 0.1 60 force"], "Disco!"),
+                "dropper_heart": (self._heart_commands(player), "Dziękujemy za obserwację!"),
                 "dropper_jump": ([f"effect give {player} minecraft:jump_boost 4 2 true",
                                   f"effect give {player} minecraft:slow_falling 6 0 true"], "Wysoki skok — bezpieczne lądowanie!"),
                 "dropper_shield": ([f"effect give {player} minecraft:resistance 6 1 true"], "Tarcza odporności na 6 sekund!"),
@@ -1337,6 +1368,13 @@ class ParkourServer:
             "parkour_speed": ([f"effect give {player} minecraft:speed 8 1 true"], "Sprint przez 8 sekund!"),
             "parkour_slow": ([f"effect give {player} minecraft:slowness 7 1 true"], "Spowolnienie przez 7 sekund!"),
             "parkour_blind": ([f"effect give {player} minecraft:darkness 4 0 true"], "Ciemność przez 4 sekundy!"),
+            # Dłuższa, mocniejsza ciemność — „ledwo co widać” na czas eventu.
+            "parkour_blackout": (self._blackout_commands(player, 15), "Ciemność: ledwo co widać przez 15 sekund!"),
+            "parkour_night": (["time set midnight", "weather clear"], "Noc zapada nad mapą!"),
+            "parkour_heart": (self._heart_commands(player), "Dziękujemy za obserwację!"),
+            "parkour_lightning": ([f"execute at {player} run summon minecraft:lightning_bolt ~ ~ ~"], "Piorun w gracza!"),
+            "parkour_disco": ([f"execute at {player} run particle minecraft:end_rod ~ ~2 ~ 1.5 1 1.5 0.2 120 force",
+                               f"execute at {player} run particle minecraft:note ~ ~2 ~ 1 1 1 0.1 60 force"], "Disco!"),
             "parkour_jump": ([f"effect give {player} minecraft:jump_boost 4 2 true",
                               f"effect give {player} minecraft:slow_falling 6 0 true"],
                              "Wysoki skok — bezpieczne lądowanie!"),

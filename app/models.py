@@ -28,6 +28,9 @@ class Trigger(BaseModel):
     max_coins: Optional[int] = Field(default=None, ge=0)
     keyword: Optional[str] = None            # dla triggera "comment"
     like_threshold: Optional[int] = None     # co ile lajków odpalić (np. co 100)
+    # True = próg liczony ze WSZYSTKICH polubień w sesji (np. „1000 tapów”),
+    # False = osobno dla każdego widza.
+    like_global: bool = False
 
 
 class Action(BaseModel):
@@ -189,4 +192,7 @@ KNOWN_ACTIONS: list[str] = [
     "dropper_push", "dropper_level_forward", "dropper_level_back", "dropper_reset",
     "dropper_speed", "dropper_slow", "dropper_blind", "dropper_jump",
     "dropper_shield", "dropper_cleanse",
+    # Eventy „wow” — ciemność, piorun, disco w obu trybach
+    "parkour_blackout", "parkour_lightning", "parkour_disco", "parkour_night", "parkour_heart",
+    "dropper_blackout", "dropper_lightning", "dropper_disco", "dropper_heart",
 ]

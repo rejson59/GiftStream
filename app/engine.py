@@ -23,6 +23,7 @@ class Engine:
         self._cooldowns: dict[str, float] = {}   # rule_id -> ts ostatniego odpalenia globalnie
         self._user_cooldowns: dict[tuple[str, str], float] = {}  # (rule_id, user) -> ts
         self._like_accum: dict[str, int] = {}    # rule_id -> nagromadzone lajki
+        self._likes_total = 0                    # polubienia w sesji (progi globalne)
         self.stats = {"events": 0, "actions": 0, "cooldown_skips": 0}
 
     def reset_stats(self) -> None:
@@ -30,6 +31,7 @@ class Engine:
         self._cooldowns.clear()
         self._user_cooldowns.clear()
         self._like_accum.clear()
+        self._likes_total = 0
 
     # -- preset ------------------------------------------------------------
     def load_preset(self, preset_id: str) -> Preset | None:
@@ -37,6 +39,7 @@ class Engine:
         self._cooldowns.clear()
         self._user_cooldowns.clear()
         self._like_accum.clear()
+        self._likes_total = 0
         return self.active_preset
 
     # -- dopasowanie ---------------------------------------------------------
@@ -76,8 +79,26 @@ class Engine:
             return True
         return True  # follow / join / share / subscribe — bez warunków
 
+    @property
+    def likes_total(self) -> int:
+        """Polubienia zebrane w sesji — podstawa progów globalnych („1000 tapów”)."""
+        return self._likes_total
+
     def _like_threshold_hit(self, rule: Rule, ev: TikTokEvent) -> bool:
+        """Próg polubień: per reguła/globalnie, albo ze wszystkich widzów naraz.
+
+        ``like_global`` liczy polubienia wszystkich widzów w sesji, więc
+        „1000 tapów” daje efekt w momencie, gdy czat nabije tysiąc — a nadwyżka
+        nie ginie: kolejne 1000 tapów odpali efekt ponownie.
+        """
         threshold = rule.trigger.like_threshold or 100
+        if getattr(rule.trigger, "like_global", False):
+            self._likes_total += ev.like_count or 1
+            self.stats["likes_total"] = self._likes_total
+            if self._likes_total >= threshold:
+                self._likes_total -= threshold
+                return True
+            return False
         acc = self._like_accum.get(rule.id, 0) + (ev.like_count or 1)
         if acc >= threshold:
             self._like_accum[rule.id] = acc - threshold
