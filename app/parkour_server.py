@@ -678,6 +678,7 @@ def _replace_world_with_bundled_map(root: Path, backup_stage: Path) -> str:
     world = root / "world"
     staged = root / ".giftstream-world-stage"
     shutil.rmtree(staged, ignore_errors=True)
+    shutil.rmtree(backup_stage, ignore_errors=True)  # leftovers from a killed reset
     staged.mkdir(parents=True, exist_ok=True)
     try:
         _extract_map(_map_archive(), staged)
@@ -691,12 +692,22 @@ def _replace_world_with_bundled_map(root: Path, backup_stage: Path) -> str:
     if world.exists():
         previous = backup_stage
         try:
-            os.replace(world, previous)
+            shutil.rmtree(previous, ignore_errors=True)
+            # shutil.move copes with a server folder on another drive (a user-picked
+            # path may sit on D: while %LOCALAPPDATA% is on C:); os.replace would fail
+            # there with EXDEV.
+            shutil.move(str(world), str(previous))
         except OSError as exc:
             diagnostics.warning("Could not move the old world aside (%s); replacing it directly.", exc)
             shutil.rmtree(world, ignore_errors=True)
             previous = None
-    os.replace(staged, world)
+    try:
+        shutil.move(str(staged), str(world))
+    except OSError:
+        # Restore the previous world instead of leaving the installation empty.
+        if previous is not None and not world.exists():
+            shutil.move(str(previous), str(world))
+        raise
     marker = root / ".giftstream-map-reset.json"
     _archive_marker(marker, _world_copy_signature(world))
     if previous is not None:
@@ -969,14 +980,19 @@ class ParkourServer:
             raise RuntimeError("The map reset only applies to the Parkour mode.")
         if self._process is not None and self._process.poll() is None:
             raise RuntimeError("Stop the Minecraft server before resetting the map.")
-        try:
-            self._rcon("list", log_failure=False)
-        except Exception:
-            pass
+        if state.get("last_launch_failed"):
+            # A previous launch died before the world was loaded, so any answer on
+            # the RCON port comes from another server and must not block the reset.
+            diagnostics.warning("The last Minecraft launch failed; skipping the RCON liveness check.")
         else:
-            raise RuntimeError("Stop the Minecraft server before resetting the map.")
+            try:
+                self._rcon("list", log_failure=False)
+            except Exception:
+                pass
+            else:
+                raise RuntimeError("Stop the Minecraft server before resetting the map.")
         root = Path(str(state["server_dir"]))
-        backup = root / f".giftstream-world-before-reset-{int(time.time())}"
+        backup = root / ".giftstream-world-before-reset"
         state["world_reset_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         state["world_reset_signature"] = _replace_world_with_bundled_map(root, backup)
         self.save_settings(state)
@@ -1012,7 +1028,7 @@ class ParkourServer:
             # changed something (or a session that left blocks behind) can never end up
             # with a broken course. The previous world is kept until the new one is in
             # place, so an interrupted reset cannot destroy the installation.
-            previous = root / f".giftstream-world-before-reset-{int(time.time())}"
+            previous = root / ".giftstream-world-before-reset"
             try:
                 state["world_reset_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 state["world_reset_signature"] = _replace_world_with_bundled_map(root, previous)
@@ -1059,6 +1075,9 @@ class ParkourServer:
             self._rcon_retry_delay = 1.0
             self._last_logged_exit = None
             self._last_status_ready = None
+            if state.get("last_launch_failed"):
+                state.pop("last_launch_failed", None)
+                _write_parkour_settings(state)
             diagnostics.info("Minecraft server process started (PID %s); stdout/stderr goes to %s.",
                              self._process.pid, root / "giftstream-server.log")
         except Exception as exc:
@@ -1150,6 +1169,11 @@ class ParkourServer:
                 diagnostics.error("The Minecraft server process exited with code %s. JVM log: %s",
                                   code, Path(str(state.get("server_dir", ""))) / "giftstream-server.log")
                 self._last_logged_exit = code
+                # Remember it: a world reset must not be blocked by an RCON answer
+                # coming from some other server on this machine.
+                if state.get("server_dir"):
+                    state["last_launch_failed"] = True
+                    _write_parkour_settings(state)
             self._last_status_ready = False
             self._last_status_snapshot = None
             return response

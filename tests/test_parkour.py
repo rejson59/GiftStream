@@ -1113,3 +1113,79 @@ def test_manual_map_reset_replaces_the_world_when_stopped(tmp_path, monkeypatch)
     result = server.reset_world()
     assert result["message"] == "The 100 Levels map was restored from the bundled copy."
     assert json.loads(settings_path.read_text())["world_reset_signature"] == "sig"
+
+
+def test_map_reset_survives_a_server_folder_on_another_drive(tmp_path, monkeypatch):
+    """shutil.move instead of os.replace: a server folder may sit on D:."""
+    from app import parkour_server as ps
+
+    server_dir = tmp_path / "server"
+    (server_dir / "world").mkdir(parents=True)
+    (server_dir / "world" / "level.dat").write_bytes(b"edited")
+    monkeypatch.setattr(ps, "_map_archive", lambda: Path(MAP_FILENAME))
+    monkeypatch.setattr(ps, "_extract_map", lambda archive, destination: (
+        (destination / "level.dat").write_bytes(b"pristine"), None)[1])
+    monkeypatch.setattr(ps, "_patch_map_datapack", lambda world: None)
+
+    moves = []
+    real_move = ps.shutil.move
+
+    def tracking_move(source, destination):
+        moves.append((Path(source).name, Path(destination).name))
+        return real_move(source, destination)
+
+    monkeypatch.setattr(ps.shutil, "move", tracking_move)
+    ps._replace_world_with_bundled_map(server_dir, server_dir / ".giftstream-world-before-reset")
+    assert ("world", ".giftstream-world-before-reset") in moves
+    assert ("level.dat", "level.dat") not in moves  # only whole directories move
+    assert (server_dir / "world" / "level.dat").read_bytes() == b"pristine"
+
+
+def test_failed_swap_restores_the_previous_world(tmp_path, monkeypatch):
+    """If installing the new map fails, the old world must come back."""
+    from app import parkour_server as ps
+
+    server_dir = tmp_path / "server"
+    (server_dir / "world").mkdir(parents=True)
+    (server_dir / "world" / "level.dat").write_bytes(b"mine")
+    monkeypatch.setattr(ps, "_map_archive", lambda: Path(MAP_FILENAME))
+    monkeypatch.setattr(ps, "_extract_map", lambda archive, destination: (
+        (destination / "level.dat").write_bytes(b"new"), None)[1])
+    monkeypatch.setattr(ps, "_patch_map_datapack", lambda world: None)
+
+    real_move = ps.shutil.move
+    calls = {"n": 0}
+
+    def failing_move(source, destination):
+        # First move puts the old world aside, the second one fails.
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk full")
+        return real_move(source, destination)
+
+    monkeypatch.setattr(ps.shutil, "move", failing_move)
+    with pytest.raises(OSError, match="disk full"):
+        ps._replace_world_with_bundled_map(server_dir, server_dir / ".giftstream-world-before-reset")
+    assert (server_dir / "world" / "level.dat").read_bytes() == b"mine"
+
+
+def test_reset_is_allowed_when_the_last_launch_failed(tmp_path, monkeypatch):
+    """A stray RCON answer from another server must not block recovery."""
+    from app import parkour_server as ps
+
+    settings_path = tmp_path / "settings.json"
+    server_dir = tmp_path / "server"
+    (server_dir / "world").mkdir(parents=True)
+    (server_dir / "world" / "level.dat").write_bytes(b"broken")
+    settings_path.write_text(json.dumps({
+        "server_dir": str(server_dir), "game_mode": "parkour", "rcon_password": "secret",
+        "rcon_host": "127.0.0.1", "rcon_port": 25575, "last_launch_failed": True,
+    }))
+    monkeypatch.setattr(ps, "SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(ps, "_replace_world_with_bundled_map", lambda root, backup: "sig")
+
+    server = ParkourServer()
+    monkeypatch.setattr(server, "_rcon", lambda *a, **k: "There are 1 of a max of 8 players online:")
+    monkeypatch.setattr(server, "status", lambda: {"ready": False})
+    result = server.reset_world()
+    assert "restored" in result["message"]
