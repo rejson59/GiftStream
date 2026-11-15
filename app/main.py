@@ -36,6 +36,7 @@ from .version import VERSION
 from . import update_state
 from . import diagnostics
 from .myinstants import search as search_myinstants
+from . import audio as audio_tools
 
 load_dotenv()
 ROOT = bundle_root()
@@ -571,6 +572,170 @@ async def upload_sound(request: Request, filename: str = "") -> dict[str, Any]:
     return {"url": f"/api/sounds/uploads/{asset}", "name": safe_name, "size": len(payload), "content_type": media_type}
 
 
+def _save_sound_asset(payload: bytes, suffix: str) -> str:
+    _SOUND_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    asset = f"{uuid.uuid4().hex}{suffix}"
+    (_SOUND_UPLOAD_DIR / asset).write_bytes(payload)
+    return asset
+
+
+def _wav_duration_seconds(path: Path) -> float | None:
+    """Długość pliku WAV; formaty skompresowane panel mierzy w przeglądarce."""
+    if path.suffix.lower() != ".wav":
+        return None
+    try:
+        return audio_tools.wav_info(path.read_bytes())["duration"]
+    except (OSError, audio_tools.AudioError):
+        return None
+
+
+@app.get("/api/sounds/uploads")
+async def list_uploaded_sounds() -> dict[str, Any]:
+    """Wgrane pliki audio — do ponownego użycia bez wgrywania od nowa."""
+    items: list[dict[str, Any]] = []
+    if _SOUND_UPLOAD_DIR.is_dir():
+        for path in sorted(_SOUND_UPLOAD_DIR.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+            if not _SOUND_FILE_RE.fullmatch(path.name):
+                continue
+            stat = path.stat()
+            items.append({"url": f"/api/sounds/uploads/{path.name}", "name": path.name,
+                          "size": stat.st_size, "modified": int(stat.st_mtime),
+                          "duration": _wav_duration_seconds(path)})
+    return {"files": items[:200], "limit": _SOUND_UPLOAD_LIMIT}
+
+
+_AUDIO_DOWNLOAD_LIMIT = 10 * 1024 * 1024
+_AUDIO_MIME_EXT = {"audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav",
+                   "audio/wave": ".wav", "audio/vnd.wave": ".wav", "audio/ogg": ".ogg",
+                   "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/aac": ".aac", "audio/flac": ".flac",
+                   "audio/x-flac": ".flac"}
+_AUDIO_URL_EXT = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}
+
+
+def _unsafe_host(hostname: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        ip = None
+    if ip is not None and (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved):
+        return True
+    return (not hostname or hostname in {"localhost", "metadata.google.internal"} or
+            hostname.endswith((".localhost", ".local", ".internal")))
+
+
+def _public_audio_url(value: str, what: str = "Dźwięk", allow_local: bool = False) -> str:
+    """Akceptuje wyłącznie publiczny HTTPS (albo plik wgrany do GiftStream)."""
+    if allow_local and value.startswith("/api/sounds/uploads/"):
+        return value
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if (len(value) > 2048 or parsed.scheme != "https" or not hostname or parsed.username or
+            parsed.password or _unsafe_host(hostname)):
+        raise HTTPException(422, f"{what} musi być publicznym linkiem HTTPS albo wgranym plikiem lokalnym.")
+    return value
+
+
+@app.post("/api/sounds/fetch")
+async def fetch_sound(data: dict[str, Any]) -> dict[str, Any]:
+    """Pobiera dźwięk z publicznego linku do lokalnego pliku, żeby dało się go przyciąć.
+
+    Przeglądarka nie potrafi odczytać bajtów z obcego serwera (CORS), więc to
+    GiftStream robi kontrolowane pobranie: tylko HTTPS, limit 10 MB, sprawdzamy
+    typ pliku i zapisujemy lokalnie. Dzięki temu przycinanie działa też dla
+    wyników MyInstants.
+    """
+    url = _public_audio_url(str(data.get("url") or "").strip(), "Link dźwięku")
+    try:
+        downloaded, _media_type = await asyncio.to_thread(_download_audio, url)
+    except Exception as exc:
+        raise HTTPException(502, f"Nie udało się pobrać dźwięku z linku: {exc}") from exc
+    suffix = downloaded["suffix"]
+    asset = _save_sound_asset(downloaded["payload"], suffix)
+    name = str(data.get("name") or Path(urlparse(url).path).name or "dźwięk")[:100]
+    diagnostics.info("Pobrano dźwięk z linku do pliku lokalnego (%s, %s bajtów).", suffix, len(downloaded["payload"]))
+    return {"url": f"/api/sounds/uploads/{asset}", "name": name, "size": len(downloaded["payload"]),
+            "content_type": downloaded["content_type"], "source": "download"}
+
+
+class _AudioRedirect(urllib.request.HTTPRedirectHandler):
+    """Blokuje przekierowania poza publiczny HTTPS — inaczej link mógłby
+    prowadzić do localhostu albo sieci lokalnej streamera (SSRF)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urljoin(req.full_url, newurl)
+        try:
+            _public_audio_url(target)
+        except HTTPException as exc:
+            raise urllib.error.HTTPError(target, code, str(exc.detail), headers, fp) from exc
+        return super().redirect_request(req, fp, code, msg, headers, target)
+
+
+def _download_audio(url: str) -> tuple[dict[str, Any], str]:
+    request = urllib.request.Request(url, headers={"User-Agent": "GiftStream/1 (sound fetch)",
+                                                   "Accept": "audio/*,application/octet-stream"})
+    opener = urllib.request.build_opener(_AudioRedirect())
+    with opener.open(request, timeout=10) as response:
+        final = response.geturl()
+        _public_audio_url(final, "Link dźwięku")
+        raw_type = (response.headers.get_content_type() or "").lower()
+        length = response.headers.get("Content-Length")
+        if length and int(length) > _AUDIO_DOWNLOAD_LIMIT:
+            raise ValueError("Dźwięk przekracza limit 10 MB.")
+        payload = response.read(_AUDIO_DOWNLOAD_LIMIT + 1)
+    if not payload or len(payload) > _AUDIO_DOWNLOAD_LIMIT:
+        raise ValueError("Dźwięk jest pusty albo przekracza limit 10 MB.")
+    suffix = _AUDIO_MIME_EXT.get(raw_type) or Path(urlparse(final).path).suffix.lower()
+    if suffix not in _AUDIO_URL_EXT:
+        raise ValueError("Link nie wskazuje obsługiwanego pliku audio (MP3, WAV, OGG, M4A, AAC, FLAC).")
+    signatures = {".wav": lambda b: len(b) > 12 and b[:4] == b"RIFF" and b[8:12] == b"WAVE",
+                  ".ogg": lambda b: b.startswith(b"OggS"), ".flac": lambda b: b.startswith(b"fLaC"),
+                  ".m4a": lambda b: len(b) > 8 and b[4:8] == b"ftyp",
+                  ".aac": lambda b: len(b) > 2 and b[0] == 0xff and (b[1] & 0xf6) == 0xf0,
+                  ".mp3": lambda b: b.startswith(b"ID3") or (len(b) > 1 and b[0] == 0xff and (b[1] & 0xe0) == 0xe0)}
+    if not signatures[suffix](payload):
+        raise ValueError("Pobrany plik nie wygląda na dźwięk w formacie zgodnym z rozszerzeniem.")
+    return ({"payload": payload, "suffix": suffix,
+             "content_type": _SOUND_MIME.get(suffix, raw_type or "application/octet-stream")},
+            raw_type)
+
+
+@app.post("/api/sounds/info")
+async def sound_info(request: Request, filename: str = "") -> dict[str, Any]:
+    """Parametry dźwięku: długość, kanały, częstotliwość i przebieg fali."""
+    payload = await request.body()
+    if not payload or len(payload) > _SOUND_UPLOAD_LIMIT:
+        raise HTTPException(413, "Plik dźwiękowy jest pusty albo przekracza limit 10 MB.")
+    try:
+        info = await asyncio.to_thread(audio_tools.wav_info, payload)
+        peaks = await asyncio.to_thread(audio_tools.wav_peaks, payload, 180)
+    except audio_tools.AudioError as exc:
+        raise HTTPException(415, str(exc)) from exc
+    return {**info, "name": Path(filename.replace("\\", "/")).name[:160], "peaks": peaks}
+
+
+@app.post("/api/sounds/trim")
+async def trim_sound(request: Request, start: float = 0, end: float | None = None,
+                     fade_in_ms: int = 0, fade_out_ms: int = 0,
+                     filename: str = "") -> dict[str, Any]:
+    """Wycina fragment WAV (z miękkim wejściem/wyjściem) i zapisuje jako nowy dźwięk."""
+    payload = await request.body()
+    if not payload or len(payload) > _SOUND_UPLOAD_LIMIT:
+        raise HTTPException(413, "Plik dźwiękowy jest pusty albo przekracza limit 10 MB.")
+    if start < 0 or (end is not None and end <= start):
+        raise HTTPException(422, "Zakres przycinania jest niepoprawny.")
+    try:
+        clipped, info = await asyncio.to_thread(
+            audio_tools.trim_wav, payload, start, end, fade_in_ms, fade_out_ms)
+    except audio_tools.AudioError as exc:
+        raise HTTPException(415, str(exc)) from exc
+    asset = _save_sound_asset(clipped, ".wav")
+    stem = Path(Path(filename.replace("\\", "/")).name).stem[:80] or "fragment"
+    label = f"{stem} · {info['start']:.2f}–{info['end']:.2f} s"[:160]
+    diagnostics.info("Przycięto dźwięk do %.2f s (fade %s/%s ms).", info["duration"], fade_in_ms, fade_out_ms)
+    return {"url": f"/api/sounds/uploads/{asset}", "name": label, "size": len(clipped),
+            "content_type": "audio/wav", **info}
+
+
 @app.get("/api/sounds/uploads/{filename}")
 async def uploaded_sound(filename: str) -> FileResponse:
     if not _SOUND_FILE_RE.fullmatch(filename):
@@ -702,18 +867,7 @@ async def update_config(data: dict[str, Any]) -> dict:
             if not _SOUND_FILE_RE.fullmatch(filename) or not (_SOUND_UPLOAD_DIR / filename).is_file():
                 raise HTTPException(422, "Nie znaleziono przesłanego pliku dźwiękowego.")
         elif url:
-            parsed = urlparse(url)
-            hostname = (parsed.hostname or "").lower().rstrip(".")
-            try:
-                ip = ipaddress.ip_address(hostname)
-                unsafe_ip = ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-            except ValueError:
-                unsafe_ip = False
-            if (len(url) > 2048 or parsed.scheme != "https" or not hostname or
-                    parsed.username or parsed.password or unsafe_ip or
-                    hostname in {"localhost", "metadata.google.internal"} or
-                    hostname.endswith((".localhost", ".local", ".internal"))):
-                raise HTTPException(422, "Dźwięk musi wskazywać publiczny adres HTTPS albo lokalnie wgrany plik.")
+            _public_audio_url(url)
         data["sound_url"] = url
     merged = {**config.model_dump(), **data}
     try:
@@ -900,17 +1054,7 @@ def _validate_rule_sound_url(url: str) -> None:
         if not _SOUND_FILE_RE.fullmatch(filename) or not (_SOUND_UPLOAD_DIR / filename).is_file():
             raise HTTPException(422, "Nie znaleziono przesłanego pliku dźwiękowego przypisanego do reguły.")
         return
-    parsed = urlparse(url)
-    hostname = (parsed.hostname or "").lower().rstrip(".")
-    try:
-        ip = ipaddress.ip_address(hostname)
-        unsafe_ip = ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-    except ValueError:
-        unsafe_ip = False
-    if (len(url) > 2048 or parsed.scheme != "https" or not hostname or parsed.username or
-            parsed.password or unsafe_ip or hostname in {"localhost", "metadata.google.internal"} or
-            hostname.endswith((".localhost", ".local", ".internal"))):
-        raise HTTPException(422, "Dźwięk reguły musi być publicznym linkiem HTTPS albo wgranym plikiem lokalnym.")
+    _public_audio_url(url, "Dźwięk reguły", allow_local=True)
 
 
 @app.put("/api/presets/{preset_id}")
