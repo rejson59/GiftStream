@@ -62,6 +62,49 @@ def test_coin_price_tiers_require_explicit_verified_coin_cost(monkeypatch):
     assert [action.action for action in reset] == ["parkour_reset"]
 
 
+def test_user_cooldown_throttles_one_viewer_without_blocking_others(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("app.engine.time.time", lambda: now[0])
+    engine = Engine()
+    engine.active_preset = Preset(id="test", name="test", rules=[
+        Rule(id="rose", trigger={"type": "gift", "gift_name": "Rose"},
+             action={"type": "parkour_push"}, user_cooldown_sec=20)
+    ])
+
+    first = asyncio.run(engine.handle(TikTokEvent(type="gift", user="ViewerA", gift_name="Rose")))
+    now[0] += 10
+    repeated = asyncio.run(engine.handle(TikTokEvent(type="gift", user="viewera", gift_name="Rose")))
+    other_viewer = asyncio.run(engine.handle(TikTokEvent(type="gift", user="ViewerB", gift_name="Rose")))
+    now[0] += 10
+    after_cooldown = asyncio.run(engine.handle(TikTokEvent(type="gift", user="ViewerA", gift_name="Rose")))
+
+    assert len(first) == 1
+    assert repeated == []
+    assert len(other_viewer) == 1
+    assert len(after_cooldown) == 1
+    assert engine.stats["cooldown_skips"] == 1
+
+
+def test_global_and_per_viewer_cooldowns_can_be_combined(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("app.engine.time.time", lambda: now[0])
+    engine = Engine()
+    engine.active_preset = Preset(id="test", name="test", rules=[
+        Rule(id="rose", trigger={"type": "gift", "gift_name": "Rose"},
+             action={"type": "parkour_push"}, cooldown_sec=30, user_cooldown_sec=10)
+    ])
+
+    first = asyncio.run(engine.handle(TikTokEvent(type="gift", user="ViewerA", gift_name="Rose")))
+    now[0] += 11
+    globally_blocked = asyncio.run(engine.handle(TikTokEvent(type="gift", user="ViewerB", gift_name="Rose")))
+    now[0] += 20
+    accepted = asyncio.run(engine.handle(TikTokEvent(type="gift", user="ViewerB", gift_name="Rose")))
+
+    assert len(first) == 1
+    assert globally_blocked == []
+    assert len(accepted) == 1
+
+
 def test_like_threshold_accumulates_batches():
     engine = Engine()
     engine.active_preset = Preset(id="test", name="test", rules=[

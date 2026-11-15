@@ -43,7 +43,8 @@ class Rule(BaseModel):
     enabled: bool = True
     trigger: Trigger = Field(default_factory=Trigger)
     action: Action = Field(default_factory=Action)
-    cooldown_sec: float = 0.0                # minimalny odstęp między odpaleniami
+    cooldown_sec: float = Field(default=0.0, ge=0)  # globalny odstęp między odpaleniami
+    user_cooldown_sec: float = Field(default=0.0, ge=0, le=86400)  # odstęp dla tego samego widza
     interrupt: bool = False                  # czy to "paid interrupt" (nadpisuje wszystko)
     alert_text: str = ""                     # tekst alertu na overlayu
     sound: Optional[str] = None              # nazwa dźwięku / URL
@@ -99,11 +100,13 @@ class GameAction(BaseModel):
 # ---------------------------------------------------------------------------
 
 class OverlayWidgetPosition(BaseModel):
-    """Normalized widget geometry in percentages of the OBS canvas."""
+    """Normalized widget geometry and transform on the OBS canvas."""
     x: float = Field(ge=0, le=100)
     y: float = Field(ge=0, le=100)
     w: float = Field(ge=8, le=100)
     h: float = Field(ge=5, le=100)
+    z_index: int = Field(default=1, ge=0, le=100)
+    rotation: float = Field(default=0, ge=-180, le=180)
 
     @model_validator(mode="after")
     def stays_within_canvas(self) -> "OverlayWidgetPosition":
@@ -134,20 +137,20 @@ class AppConfig(BaseModel):
     overlay_density: Literal["compact", "balanced", "bold"] = "balanced"
     overlay_canvas: Literal["landscape", "portrait"] = "landscape"
     overlay_positions_landscape: dict[OverlayWidget, OverlayWidgetPosition] = Field(default_factory=lambda: {
-        "brand": OverlayWidgetPosition(x=2, y=2, w=28, h=9),
-        "mode": OverlayWidgetPosition(x=70, y=2, w=28, h=9),
-        "left": OverlayWidgetPosition(x=2, y=16, w=25, h=62),
-        "center": OverlayWidgetPosition(x=35, y=18, w=30, h=54),
-        "right": OverlayWidgetPosition(x=73, y=16, w=25, h=62),
-        "gifts": OverlayWidgetPosition(x=2, y=82, w=96, h=16),
+        "brand": OverlayWidgetPosition(x=2, y=2, w=28, h=9, z_index=20),
+        "mode": OverlayWidgetPosition(x=70, y=2, w=28, h=9, z_index=20),
+        "left": OverlayWidgetPosition(x=2, y=16, w=25, h=62, z_index=10),
+        "center": OverlayWidgetPosition(x=35, y=18, w=30, h=54, z_index=15),
+        "right": OverlayWidgetPosition(x=73, y=16, w=25, h=62, z_index=10),
+        "gifts": OverlayWidgetPosition(x=2, y=82, w=96, h=16, z_index=30),
     })
     overlay_positions_portrait: dict[OverlayWidget, OverlayWidgetPosition] = Field(default_factory=lambda: {
-        "brand": OverlayWidgetPosition(x=3, y=2, w=94, h=8),
-        "mode": OverlayWidgetPosition(x=3, y=11, w=94, h=7),
-        "left": OverlayWidgetPosition(x=3, y=42, w=46, h=35),
-        "center": OverlayWidgetPosition(x=10, y=20, w=80, h=20),
-        "right": OverlayWidgetPosition(x=51, y=42, w=46, h=35),
-        "gifts": OverlayWidgetPosition(x=3, y=80, w=94, h=18),
+        "brand": OverlayWidgetPosition(x=3, y=2, w=94, h=8, z_index=20),
+        "mode": OverlayWidgetPosition(x=3, y=11, w=94, h=7, z_index=20),
+        "left": OverlayWidgetPosition(x=3, y=42, w=46, h=35, z_index=10),
+        "center": OverlayWidgetPosition(x=10, y=20, w=80, h=20, z_index=15),
+        "right": OverlayWidgetPosition(x=51, y=42, w=46, h=35, z_index=10),
+        "gifts": OverlayWidgetPosition(x=3, y=80, w=94, h=18, z_index=30),
     })
     overlay_title: str = Field(default="", max_length=60)
     overlay_fields: str = Field(default="earnings,gifts,actions,viewers,likes,leaderboard", max_length=160)

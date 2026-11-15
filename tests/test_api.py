@@ -256,7 +256,7 @@ def test_live_audio_preferences_are_persisted_without_exposing_secrets(monkeypat
         "overlay_template": "arena", "overlay_theme": "violet", "overlay_accent": "#c4a7ff",
         "overlay_scale": 1.15, "overlay_opacity": 0.42, "overlay_density": "bold",
         "overlay_canvas": "portrait",
-        "overlay_positions_portrait": {"brand": {"x": 4, "y": 3, "w": 90, "h": 9}},
+        "overlay_positions_portrait": {"brand": {"x": 4, "y": 3, "w": 90, "h": 9, "z_index": 41, "rotation": -15}},
         "overlay_title": "MY LIVE", "overlay_fields": "gifts,actions,likes,leaderboard",
     })
     assert saved_sound.status_code == 200
@@ -268,13 +268,23 @@ def test_live_audio_preferences_are_persisted_without_exposing_secrets(monkeypat
     assert saved_sound.json()["overlay_opacity"] == 0.42
     assert saved_sound.json()["overlay_density"] == "bold"
     assert saved_sound.json()["overlay_canvas"] == "portrait"
-    assert saved_sound.json()["overlay_positions_portrait"]["brand"] == {"x": 4.0, "y": 3.0, "w": 90.0, "h": 9.0}
-    assert saved_sound.json()["overlay_positions_landscape"]["center"] == {"x": 35.0, "y": 18.0, "w": 30.0, "h": 54.0}
+    assert saved_sound.json()["overlay_positions_portrait"]["brand"] == {
+        "x": 4.0, "y": 3.0, "w": 90.0, "h": 9.0, "z_index": 41, "rotation": -15.0,
+    }
+    assert saved_sound.json()["overlay_positions_landscape"]["center"] == {
+        "x": 35.0, "y": 18.0, "w": 30.0, "h": 54.0, "z_index": 15, "rotation": 0.0,
+    }
     assert saved_sound.json()["overlay_fields"] == "gifts,actions,likes,leaderboard"
     assert TestClient(main.app).put("/api/config", json={"overlay_accent": "red"}).status_code == 422
     assert TestClient(main.app).put("/api/config", json={"overlay_opacity": 1.2}).status_code == 422
     assert TestClient(main.app).put("/api/config", json={
         "overlay_positions_landscape": {"left": {"x": 90, "y": 10, "w": 20, "h": 50}}
+    }).status_code == 422
+    assert TestClient(main.app).put("/api/config", json={
+        "overlay_positions_portrait": {"brand": {"x": 4, "y": 3, "w": 90, "h": 9, "z_index": 101}}
+    }).status_code == 422
+    assert TestClient(main.app).put("/api/config", json={
+        "overlay_positions_portrait": {"brand": {"x": 4, "y": 3, "w": 90, "h": 9, "rotation": 181}}
     }).status_code == 422
 
 

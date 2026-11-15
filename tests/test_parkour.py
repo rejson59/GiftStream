@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from app.parkour_server import MAP_FILENAME, MAP_VERSION, ParkourServer, _extract_map, map_level_areas
+from app.parkour_server import (MAP_FILENAME, MAP_VERSION, ParkourServer, _extract_map,
+                                map_level_areas, map_level_spawn_points)
 
 
 def test_minecraft_version_options_offer_latest_stable_and_exclude_snapshots(monkeypatch):
@@ -82,6 +83,37 @@ def test_bundled_map_has_metadata_and_level_regions():
     with zf.ZipFile(bundle_root() / MAP_FILENAME) as archive:
         assert "100 Levels/level.dat" in archive.namelist()
         assert "100 Levels/datapacks/main/pack.mcmeta" in archive.namelist()
+
+
+def test_map_level_spawn_points_are_complete_and_inside_stage_bounds():
+    areas = map_level_areas()
+    points = map_level_spawn_points(areas)
+
+    assert set(points) == set(range(1, 101))
+    for level, (x, y, z) in points.items():
+        area_x, area_z, dx, dz, dy = areas[level]
+        assert area_x <= x < area_x + dx + 1
+        assert area_z <= z < area_z + dz + 1
+        assert 0 <= y <= dy + 1
+    assert points[92] == (-26.5, 32, 276.5)
+
+
+def test_level_change_teleports_directly_to_map_spawn_not_selector_height(monkeypatch):
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
+
+    def rcon(command):
+        commands.append(command)
+        return "Streamer has 10 [level]" if command.startswith("scoreboard players get") else "ok"
+
+    monkeypatch.setattr(server, "_rcon", rcon)
+    assert server.execute_action("parkour_level_forward") == \
+        "Przeniesiono gracza na bezpieczny punkt poziomu 11."
+    assert commands == [
+        "scoreboard players get Streamer level",
+        "tp Streamer -143.5 96.0 17.5",
+    ]
 
 
 def test_map_extract_strips_archive_root_into_world_directory(tmp_path):
@@ -235,19 +267,61 @@ def test_non_windows_without_compatible_java_gets_actionable_setup_error(monkeyp
         parkour_server.ensure_java(21)
 
 
-def test_push_action_uses_a_small_local_knockback_and_validates_player(monkeypatch):
+def test_push_action_uses_a_strong_sudden_shove_and_validates_player(monkeypatch):
     server = ParkourServer()
     commands = []
     monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
     monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
+    monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 18000)
     message = server.execute_action("parkour_push")
-    assert "3 bloki" in message
-    assert commands == [
-        "effect give Streamer minecraft:slow_falling 3 0 true",
-        "execute as Streamer at Streamer run tp @s ^ ^0.6 ^-3",
-    ]
+    assert "Punch II" in message
+    assert len(commands) == 1
+    assert "rotated 0.00 0 positioned ^ ^1 ^-6" in commands[0]
+    assert "Motion:[-0.0000d,0.06d,1.8000d]" in commands[0]
+    assert '"minecraft:enchantments":{"minecraft:punch":2}' in commands[0]
+    assert "damage:1.0d,pickup:0b" in commands[0]
     with pytest.raises(ValueError):
         server.execute_action("parkour_push", "bad player")
+
+
+def test_punch_arrow_component_syntax_tracks_minecraft_release(monkeypatch):
+    server = ParkourServer()
+    monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 18000)
+
+    current = server._punch_arrow_command("Streamer", "26.2")
+    legacy_components = server._punch_arrow_command("Streamer", "1.21.4")
+    assert '"minecraft:enchantments":{"minecraft:punch":2}' in current
+    assert '"minecraft:enchantments":{levels:{"minecraft:punch":2}}' in legacy_components
+    with pytest.raises(RuntimeError, match="1.21 lub nowszego"):
+        server._punch_arrow_command("Streamer", "1.20.4")
+
+
+def test_parkour_jail_builds_safe_cell_before_teleport(monkeypatch):
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
+    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
+
+    assert server.execute_action("parkour_jail") == "Gracz trafił na 20 sekund do więzienia."
+    assert commands[:4] == [
+        "fill 1001 101 1001 1001 103 1001 minecraft:air",
+        "fill 1000 100 1000 1002 100 1002 minecraft:stone",
+        "fill 1000 101 1000 1002 104 1002 minecraft:glass hollow",
+        "tp Streamer 1001 101 1001",
+    ]
+    assert commands[4].startswith("effect give Streamer minecraft:slowness")
+
+
+def test_jail_release_uses_the_map_datapacks_lobby_spawn(monkeypatch):
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
+
+    assert server.release_jail("Streamer") == "ok"
+    assert commands == [
+        "effect clear Streamer minecraft:slowness",
+        "tp Streamer -74 126.9375 -43",
+    ]
 
 
 @pytest.mark.parametrize(("action", "commands", "message"), [
@@ -626,6 +700,22 @@ def test_dropper_map_generation_is_bounded_and_idempotent(tmp_path, monkeypatch)
     assert any("minecraft:orange_stained_glass" in command for command in commands)
     server.initialize_dropper_map()
     assert len(commands) == 66
+
+
+def test_dropper_push_is_a_sudden_strong_shove(monkeypatch):
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "settings", lambda: {
+        "player": "Streamer", "game_mode": "dropper", "dropper_map_initialized": True,
+        "dropper_player_levels": {"Streamer": 2},
+    })
+    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
+
+    monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 0)
+    assert "Punch II" in server.execute_action("dropper_push")
+    assert len(commands) == 1
+    assert "rotated -180.00 0 positioned ^ ^1 ^-6" in commands[0]
+    assert '"minecraft:enchantments":{"minecraft:punch":2}' in commands[0]
 
 
 def test_dropper_level_actions_clamp_and_persist_stage(tmp_path, monkeypatch):

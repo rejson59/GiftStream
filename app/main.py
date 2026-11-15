@@ -813,7 +813,7 @@ async def parkour_test_action(req: ParkourActionRequest) -> dict[str, Any]:
 async def actions() -> list[dict]:
     from .models import KNOWN_ACTIONS
     labels = {
-        "parkour_push": "Parkour: delikatny push",
+        "parkour_push": "Parkour: strzała Punch II",
         "parkour_level_forward": "Parkour: kolejny poziom",
         "parkour_level_back": "Parkour: poprzedni poziom",
         "parkour_jail": "Parkour: więzienie",
@@ -825,7 +825,7 @@ async def actions() -> list[dict]:
         "parkour_jump": "Parkour: wysoki skok · 4 s",
         "parkour_shield": "Parkour: tarcza · 6 s",
         "parkour_cleanse": "Parkour: usuń negatywne efekty",
-        "dropper_push": "Dropper: push",
+        "dropper_push": "Dropper: strzała Punch II",
         "dropper_level_forward": "Dropper: wyższy poziom",
         "dropper_level_back": "Dropper: niższy poziom",
         "dropper_reset": "Dropper: powrót na start",

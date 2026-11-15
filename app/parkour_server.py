@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import platform
 import re
@@ -27,6 +28,45 @@ from . import diagnostics
 PLAYER_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 MAP_FILENAME = "100-levels-5229-v1.7.4.zip"
 MAP_VERSION = "26.2"  # Version the bundled world was prepared and tested against.
+# Stable feet positions inspected from the bundled 100 Levels v1.7.4 world.
+# Each location sits directly above a clear, supported map block; the datapack's
+# dy=150/69 values are selector ranges, not course elevations.
+_MAP_LEVEL_SPAWNS: dict[int, tuple[float, float, float]] = {
+    1: (-8.5, 112, 5.5), 2: (-24.5, 112, 5.5), 3: (-39.5, 112, 5.5),
+    4: (-53.5, 112, 5.5), 5: (-67.5, 112, 5.5), 6: (-82.5, 112, 5.5),
+    7: (-95.5, 112, 5.5), 8: (-109.5, 112, 5.5), 9: (-123.5, 112, 5.5),
+    10: (-144.5, 96, 5.5), 11: (-143.5, 96, 17.5), 12: (-143.5, 96, 29.5),
+    13: (-144.5, 96, 41.5), 14: (-144.5, 96, 53.5), 15: (-143.5, 96, 68.5),
+    16: (-143.5, 96, 82.5), 17: (-143.5, 96, 93.5), 18: (-143.5, 96, 104.5),
+    19: (-143.5, 96, 115.5), 20: (-143.5, 96, 128.5), 21: (-143.5, 96, 142.5),
+    22: (-130.5, 96, 143.5), 23: (-117.5, 96, 144.5), 24: (-103.5, 96, 143.5),
+    25: (-88.5, 96, 144.5), 26: (-76.5, 96, 144.5), 27: (-62.5, 96, 144.5),
+    28: (-48.5, 96, 144.5), 29: (-37.5, 96, 143.5), 30: (-24.5, 96, 143.5),
+    31: (-9.5, 96, 143.5), 32: (-5.5, 96, 132.5), 33: (-5.5, 80, 120.5),
+    34: (-5.5, 80, 109.5), 35: (-5.5, 80, 91.5), 36: (-5.5, 80, 78.5),
+    37: (-5.5, 96, 63.5), 38: (-5.5, 96, 51.5), 39: (-5.5, 74, 36.5),
+    40: (-5.5, 89, 21.5), 41: (-17.5, 96, 18.5), 42: (-35.5, 96, 18.5),
+    43: (-52.5, 96, 18.5), 44: (-63.5, 96, 18.5), 45: (-80.5, 80, 18.5),
+    46: (-97.5, 96, 18.5), 47: (-117.5, 85, 20.5), 48: (-130.5, 96, 20.5),
+    49: (-130.5, 83, 35.5), 50: (-127.5, 80, 51.5), 51: (-130.5, 96, 65.5),
+    52: (-129.5, 96, 79.5), 53: (-130.5, 96, 96.5), 54: (-130.5, 96, 110.5),
+    55: (-130.5, 96, 127.5), 56: (-116.5, 96, 130.5), 57: (-100.5, 96, 131.5),
+    58: (-75.5, 80, 132.5), 59: (-57.5, 80, 131.5), 60: (-40.5, 96, 131.5),
+    61: (-20.5, 96, 131.5), 62: (-17.5, 96, 117.5), 63: (-17.5, 80, 99.5),
+    64: (-17.5, 90, 79.5), 65: (-17.5, 80, 64.5), 66: (-18.5, 90, 46.5),
+    67: (-17.5, 96, 31.5), 68: (-31.5, 96, 32.5), 69: (-52.5, 96, 31.5),
+    70: (-71.5, 84, 31.5), 71: (-88.5, 96, 33.5), 72: (-110.5, 80, 33.5),
+    73: (-115.5, 80, 50.5), 74: (-115.5, 96, 67.5), 75: (-115.5, 80, 84.5),
+    76: (-115.5, 96, 108.5), 77: (-97.5, 64, 115.5), 78: (-79.5, 48, 115.5),
+    79: (-56.5, 80, 115.5), 80: (-34.5, 80, 115.5), 81: (-33.5, 32, 98.5),
+    82: (-33.5, 80, 76.5), 83: (-33.5, 64, 52.5), 84: (-54.5, 64, 47.5),
+    85: (-78.5, 64, 53.5), 86: (-96.5, 80, 52.5), 87: (-96.5, 64, 72.5),
+    88: (-95.5, 80, 94.5), 89: (-76.5, 96, 97.5), 90: (-54.5, 96, 97.5),
+    91: (-51.5, 80, 74.5), 92: (-26.5, 32, 276.5), 93: (-46.5, 32, 276.5),
+    94: (-69.5, 32, 276.5), 95: (-71.5, 32, 296.5), 96: (-71.5, 32, 318.5),
+    97: (-49.5, 32, 319.5), 98: (-26.5, 32, 320.5), 99: (-26.5, 32, 296.5),
+    100: (-74.5, 96, 74.5),
+}
 VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 SETTINGS_PATH = data_dir() / "minecraft_parkour.json"
 MAX_SERVER_JAR_BYTES = 300 * 1024 * 1024
@@ -83,6 +123,20 @@ def map_level_areas(archive: Path | None = None) -> dict[int, tuple[int, int, in
         raise ValueError("Nie udało się odczytać zakresów poziomów z mapy parkour.")
     return result
 
+
+def map_level_spawn_points(areas: dict[int, tuple[int, int, int, int, int]] | None = None
+                           ) -> dict[int, tuple[float, float, float]]:
+    """Return verified, deterministic landing positions within each map stage."""
+    areas = areas if areas is not None else map_level_areas()
+    if set(_MAP_LEVEL_SPAWNS) != set(range(1, 101)):
+        raise ValueError("Brakuje punktu lądowania dla jednego z poziomów parkour.")
+    for level, (px, py, pz) in _MAP_LEVEL_SPAWNS.items():
+        if level not in areas:
+            raise ValueError(f"Mapa nie ma zakresu dla poziomu {level}.")
+        x, z, dx, dz, dy = areas[level]
+        if not (x <= px < x + dx + 1 and z <= pz < z + dz + 1 and 0 <= py <= dy + 1):
+            raise ValueError(f"Punkt lądowania poziomu {level} wypada poza jego obszarem mapy.")
+    return dict(_MAP_LEVEL_SPAWNS)
 
 
 def _windows_java_processes() -> list[dict[str, Any]]:
@@ -1080,6 +1134,26 @@ class ParkourServer:
             raise RuntimeError(f"Nie udało się odczytać poziomu mapy: {output or 'gracz może być poza mapą'}")
         return int(match.group(1))
 
+    def _punch_arrow_command(self, player: str, minecraft_version: str = MAP_VERSION) -> str:
+        """Fire a low-damage Punch II arrow toward the player from a random side."""
+        version_match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?$", minecraft_version)
+        version = tuple(map(int, version_match.groups(default="0"))) if version_match else (0, 0, 0)
+        if version < (1, 21, 0):
+            raise RuntimeError("Strzała Punch II wymaga Minecraft 1.21 lub nowszego. Zmień wersję serwera.")
+        enchantments = ('{"minecraft:punch":2}' if version >= (1, 21, 5)
+                        else '{levels:{"minecraft:punch":2}}')
+        yaw = secrets.randbelow(36000) / 100 - 180
+        radians = math.radians(yaw)
+        speed = 1.8
+        motion_x = -math.sin(radians) * speed
+        motion_z = math.cos(radians) * speed
+        return (
+            f'execute as {player} at @s rotated {yaw:.2f} 0 positioned ^ ^1 ^-6 '
+            f'run summon minecraft:arrow ~ ~ ~ '
+            f'{{Motion:[{motion_x:.4f}d,0.06d,{motion_z:.4f}d],damage:1.0d,pickup:0b,'
+            f'weapon:{{id:"minecraft:bow",count:1,components:{{"minecraft:enchantments":{enchantments}}}}}}}'
+        )
+
     def execute_action(self, action: str, player: str | None = None) -> str:
         state = self.settings()
         player = player or str(state.get("player", ""))
@@ -1094,9 +1168,9 @@ class ParkourServer:
             levels = state.setdefault("dropper_player_levels", {})
             stage = self._dropper_lane(levels.get(player, 1))
             if action == "dropper_push":
-                self._rcon_checked(f"effect give {player} minecraft:slow_falling 3 0 true")
-                self._rcon_checked(f"execute as {player} at {player} run tp @s ^ ^0.4 ^-3")
-                return "Gracz został delikatnie odepchnięty w szybie Droppera."
+                self._rcon_checked(self._punch_arrow_command(
+                    player, str(state.get("minecraft_version", MAP_VERSION))))
+                return "W szybie nadleciała z losowego kierunku strzała z odrzutem Punch II."
             if action in {"dropper_level_forward", "dropper_level_back"}:
                 stage = self._dropper_lane(stage + (1 if action.endswith("forward") else -1))
                 levels[player] = stage
@@ -1128,28 +1202,21 @@ class ParkourServer:
                 return message
             raise ValueError("Nieobsługiwana akcja Dropper.")
         if action == "parkour_push":
-            commands = [f"effect give {player} minecraft:slow_falling 3 0 true",
-                        f"execute as {player} at {player} run tp @s ^ ^0.6 ^-3"]
-            for command in commands:
-                self._rcon_checked(command)
-            diagnostics.info("Akcja Parkour push zakończona powodzeniem dla gracza %s.", player)
-            return "Delikatnie odrzucono gracza o 3 bloki do tyłu."
+            self._rcon_checked(self._punch_arrow_command(
+                player, str(state.get("minecraft_version", MAP_VERSION))))
+            diagnostics.info("Akcja strzały Punch II zakończona powodzeniem dla gracza %s.", player)
+            return "W gracza nadleciała z losowego kierunku strzała z odrzutem Punch II."
         if action in {"parkour_level_forward", "parkour_level_back"}:
             areas = map_level_areas()
+            spawn_points = map_level_spawn_points(areas)
             current = self.get_player_level(player)
             target = max(1, min(100, current + (1 if action.endswith("forward") else -1)))
-            if target not in areas:
-                raise RuntimeError(f"Mapa nie ma zakresu dla poziomu {target}.")
-            x, z, dx, dz, dy = areas[target]
-            # Drop into the region from above its declared vertical bound while
-            # slow-falling, allowing the map's own course geometry to catch the player.
-            y = dy + 3
-            commands = [f"effect give {player} minecraft:slow_falling 30 0 true",
-                        f"tp {player} {x + dx / 2:.1f} {y} {z + dz / 2:.1f}"]
-            for command in commands:
-                self._rcon_checked(command)
-            diagnostics.info("Przeniesiono gracza %s na obszar poziomu %s.", player, target)
-            return f"Przeniesiono gracza na obszar poziomu {target}."
+            x, y, z = spawn_points[target]
+            # The datapack's dy is a selector extent (usually 150), not a
+            # physical course height. Land directly on a map-verified platform.
+            self._rcon_checked(f"tp {player} {x:.1f} {y:.1f} {z:.1f}")
+            diagnostics.info("Przeniesiono gracza %s na bezpieczny punkt poziomu %s.", player, target)
+            return f"Przeniesiono gracza na bezpieczny punkt poziomu {target}."
         effects = {
             "parkour_speed": ([f"effect give {player} minecraft:speed 8 1 true"], "Sprint przez 8 sekund!"),
             "parkour_slow": ([f"effect give {player} minecraft:slowness 7 1 true"], "Spowolnienie przez 7 sekund!"),
@@ -1173,15 +1240,18 @@ class ParkourServer:
             diagnostics.info("Zastosowano efekt Parkour '%s' dla gracza %s.", action, player)
             return message
         if action == "parkour_jail":
-            commands = [f"tp {player} 1001 101 1001",
+            # Prepare a clear, solid cell before moving the player so they never
+            # arrive in an unloaded/empty chunk and fall before the floor exists.
+            commands = ["fill 1001 101 1001 1001 103 1001 minecraft:air",
                         "fill 1000 100 1000 1002 100 1002 minecraft:stone",
                         "fill 1000 101 1000 1002 104 1002 minecraft:glass hollow",
+                        f"tp {player} 1001 101 1001",
                         f"effect give {player} minecraft:slowness 20 255 true",
                         f"title {player} actionbar {{\"text\":\"WIĘZIENIE · 20 s\",\"color\":\"red\"}}"]
             for command in commands:
                 self._rcon_checked(command)
             diagnostics.info("Gracz %s został przeniesiony do parkour-jail na 20 sekund.", player)
-            return "Gracz trafił na 20 sekund do lobby-więzienia."
+            return "Gracz trafił na 20 sekund do więzienia."
         if action in {"parkour_reset", "parkour_antireset"}:
             raise RuntimeError("Reset z odliczaniem jest koordynowany przez GiftStream.")
         raise ValueError("Nieobsługiwana akcja parkour.")
@@ -1213,4 +1283,6 @@ class ParkourServer:
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Niepoprawny nick gracza.")
         self._rcon_checked(f"effect clear {player} minecraft:slowness")
-        return self._rcon_checked(f"tp {player} -4 89 1")
+        # Use the map datapack's configured join/back-to-lobby spawn, not the
+        # old hard-coded point inside the first level structure.
+        return self._rcon_checked(f"tp {player} -74 126.9375 -43")

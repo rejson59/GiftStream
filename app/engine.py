@@ -20,19 +20,22 @@ class Engine:
     def __init__(self, on_action: OnAction | None = None):
         self.on_action = on_action
         self.active_preset: Preset | None = None
-        self._cooldowns: dict[str, float] = {}   # rule_id -> ts ostatniego odpalenia
+        self._cooldowns: dict[str, float] = {}   # rule_id -> ts ostatniego odpalenia globalnie
+        self._user_cooldowns: dict[tuple[str, str], float] = {}  # (rule_id, user) -> ts
         self._like_accum: dict[str, int] = {}    # rule_id -> nagromadzone lajki
         self.stats = {"events": 0, "actions": 0, "cooldown_skips": 0}
 
     def reset_stats(self) -> None:
         self.stats = {"events": 0, "actions": 0, "cooldown_skips": 0}
         self._cooldowns.clear()
+        self._user_cooldowns.clear()
         self._like_accum.clear()
 
     # -- preset ------------------------------------------------------------
     def load_preset(self, preset_id: str) -> Preset | None:
         self.active_preset = store.get_preset(preset_id)
         self._cooldowns.clear()
+        self._user_cooldowns.clear()
         self._like_accum.clear()
         return self.active_preset
 
@@ -98,14 +101,23 @@ class Engine:
             if rule.trigger.type == "like" and not self._like_threshold_hit(rule, ev):
                 continue
 
-            # Cooldown
+            now = time.time()
+            # The existing rule cooldown is global. The optional user cooldown
+            # throttles repeated actions from one viewer without blocking others.
             if rule.cooldown_sec > 0:
                 last = self._cooldowns.get(rule.id, 0.0)
-                if time.time() - last < rule.cooldown_sec:
+                if now - last < rule.cooldown_sec:
                     self.stats["cooldown_skips"] += 1
                     continue
+            user_key = (rule.id, (ev.user or "unknown").strip().casefold())
+            if rule.user_cooldown_sec > 0:
+                last = self._user_cooldowns.get(user_key, 0.0)
+                if now - last < rule.user_cooldown_sec:
+                    self.stats["cooldown_skips"] += 1
+                    continue
+                self._user_cooldowns[user_key] = now
 
-            self._cooldowns[rule.id] = time.time()
+            self._cooldowns[rule.id] = now
             ga = GameAction(
                 action=rule.action.type,
                 params={**rule.action.params,
