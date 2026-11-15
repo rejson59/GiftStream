@@ -1072,12 +1072,23 @@ def test_start_resets_the_world_before_launching_minecraft(tmp_path, monkeypatch
         """Minimal stand-in for subprocess.Popen (Windows kills real handle tricks)."""
         pid = 123
 
+        returncode = 0
+
         def poll(self):
             return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
 
     monkeypatch.setattr(ps.subprocess, "Popen",
                         lambda *a, **k: order.append("start") or FakeProcess())
     monkeypatch.setattr(ps, "_write_parkour_settings", lambda state: None)
+    # Windows-only: status() lists Java processes through subprocess.run, which
+    # would reuse the Popen stub above.
+    monkeypatch.setattr(ps, "_windows_java_processes", lambda: [])
 
     server._start_once()
     assert order == ["reset", "start"]
