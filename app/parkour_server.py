@@ -22,6 +22,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .level_checkpoints_data import CHECKPOINTS
 from .paths import bundle_root, data_dir
 from . import diagnostics
 
@@ -119,9 +120,48 @@ def map_level_areas(archive: Path | None = None) -> dict[int, tuple[int, int, in
         if match:
             x, z, dx, dy, dz, level = map(int, match.groups())
             result[level] = (x, z, dx, dz, dy)
+    # The datapack runs every selector in this file each tick, in order, so the
+    # last matching line decides the level score. Level 100 simply has two areas
+    # (the course stage and the final arena).
+    _LEVEL_AREA_ORDER[:] = [
+        (int(match.group(6)), int(match.group(1)), int(match.group(2)),
+         int(match.group(3)), int(match.group(5)), int(match.group(4)))
+        for match in (pattern.search(line) for line in text.splitlines()) if match
+    ]
     if len(result) < 90 or not {1, 50, 100}.issubset(result):
         raise ValueError("Could not read the level bounds from the parkour map.")
     return result
+
+
+# (level, x, z, dx, dz, dy) in the exact order the datapack applies them.
+_LEVEL_AREA_ORDER: list[tuple[int, int, int, int, int, int]] = []
+
+
+def _level_score_at(x: int, y: int, z: int) -> int | None:
+    """The ``level`` score the datapack would give this block position.
+
+    Every ``setlevel`` line is a selector for its own level and they are applied
+    in file order, so overlapping areas are resolved the same way the map does
+    it: the last matching line wins. Level 100 has two areas (course stage and
+    final arena) which overlap nothing, but level 52's box is partly covered by
+    later lines — that is why a plain "closest centre" guess teleported players
+    to the wrong level.
+    """
+    if not _LEVEL_AREA_ORDER:
+        map_level_areas()
+    score = None
+    for level, ax, az, dx, dz, dy in _LEVEL_AREA_ORDER:
+        if ax <= x <= ax + dx and az <= z <= az + dz and 0 <= y <= dy:
+            score = level
+    if score is not None:
+        return score
+    # The final levels declare a height limit (dy=69) while their arena extends
+    # higher, so a player finishing the map up there would otherwise look "off
+    # the map". Fall back to the same horizontal boxes, ignoring the height.
+    for level, ax, az, dx, dz, _dy in _LEVEL_AREA_ORDER:
+        if ax <= x <= ax + dx and az <= z <= az + dz:
+            score = level
+    return score
 
 
 def map_level_spawn_points(areas: dict[int, tuple[int, int, int, int, int]] | None = None
@@ -139,35 +179,33 @@ def map_level_spawn_points(areas: dict[int, tuple[int, int, int, int, int]] | No
     return dict(_MAP_LEVEL_SPAWNS)
 
 
-_CHECKPOINT_FILE = Path(__file__).with_name("level_checkpoints.json")
-_checkpoint_cache: dict[str, Any] | None = None
+_checkpoint_cache: dict[int, tuple[float, float, float]] | None = None
 
 
 def level_checkpoints() -> dict[int, tuple[float, float, float]]:
     """Real start points of every 100 Levels level (the player's feet).
 
-    The table is generated from the map file with
-    ``tools/build_level_checkpoints.py``: first the checkpoint plate standing on
-    the level, and when there is none — the highest safe block in the level area.
+    The table lives in :mod:`app.level_checkpoints_data`, i.e. inside the Python
+    code, so it is always present in the packaged application. (A separate JSON
+    file was not bundled by PyInstaller, which is why level changes failed with
+    "no stored checkpoint" in the released .exe.) Each entry was generated from
+    the real map blocks by ``tools/build_level_checkpoints.py``.
     """
     global _checkpoint_cache
     if _checkpoint_cache is None:
-        try:
-            data = json.loads(_CHECKPOINT_FILE.read_text(encoding="utf-8"))
-            _checkpoint_cache = {int(level): (float(spot["x"]), float(spot["y"]), float(spot["z"]))
-                                 for level, spot in data.get("levels", {}).items()}
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            diagnostics.error("Could not load the map checkpoint table: %s", exc)
-            _checkpoint_cache = {}
+        _checkpoint_cache = {int(level): (float(spot[0]), float(spot[1]), float(spot[2]))
+                             for level, spot in CHECKPOINTS.items()}
     return dict(_checkpoint_cache)
 
 
 def level_checkpoint(level: int) -> tuple[float, float, float]:
+    """Feet position of a level's own checkpoint; clamped to 1..100."""
     points = level_checkpoints()
     level = max(1, min(int(level), 100))
-    if level not in points:
-        raise RuntimeError(f"The 100 Levels map has no stored checkpoint for level {level}.")
-    return points[level]
+    spot = points.get(level)
+    if spot is None:
+        raise RuntimeError(f"The bundled map has no checkpoint for level {level}.")
+    return spot
 
 
 def _windows_java_processes() -> list[dict[str, Any]]:
@@ -1295,53 +1333,66 @@ class ParkourServer:
         return tuple(float(value) for value in match.groups())
 
     def level_at_position(self, position: tuple[float, float, float] | None) -> int | None:
-        """Which level the player is standing on (from the datapack areas).
+        """Which level the player stands in, using the map's own area rules.
 
-        The datapack sets the ``level`` score only when the player is inside
-        their own area — in practice it is enough to check which x/z rectangle
-        the player stands in. Areas overlap on their borders, so we pick the one
-        whose centre is closest and verify that the player is vertically near
-        the level floor.
+        The datapack resolves overlapping boxes by applying its ``setlevel``
+        lines in order, so a plain "closest area centre" guess could answer
+        level 52 for a player who is really on 74/75, and could answer level 100
+        for the final arena while the player was still on the last course stage.
+        Here the very same rule is applied, and the map checkpoint floors are
+        only used as a sanity check for positions far outside the stages.
         """
         if not position:
             return None
-        # The block the player stands in — map areas are given in blocks.
-        x, y, z = math.floor(position[0]), position[1], math.floor(position[2])
-        areas = map_level_areas()
+        x, y, z = math.floor(position[0]), math.floor(position[1]), math.floor(position[2])
+        score = _level_score_at(x, y, z)
+        if score is not None:
+            return score
+        # Not inside any stage box (e.g. the lobby or a fall below the course):
+        # fall back to the vertically nearest checkpoint of a box we are above.
         points = level_checkpoints()
         candidates: list[tuple[float, int]] = []
-        for level, (ax, az, dx, dz, _dy) in areas.items():
-            if not (ax <= x <= ax + dx and az <= z <= az + dz):
+        for level, (ax, az, dx, dz, _dy) in map_level_areas().items():
+            if not (ax - 2 <= x <= ax + dx + 2 and az - 2 <= z <= az + dz + 2):
                 continue
             floor = points.get(level)
-            # The level must be reachable vertically: ±6 blocks from its checkpoint floor.
-            if floor is not None and not (floor[1] - 6 <= y <= floor[1] + 6):
+            if floor is None:
                 continue
-            centre_x, centre_z = ax + dx / 2, az + dz / 2
-            candidates.append((abs(x - centre_x) + abs(z - centre_z), level))
+            candidates.append((abs(y - floor[1]), level))
         if not candidates:
             return None
-        return min(candidates)[1]
+        distance, level = min(candidates)
+        return level if distance <= 24 else None
 
     def get_player_level_or_position(self, player: str) -> int:
-        """Player level: the map scoreboard first, then the real position."""
+        """Player level: the real position first, then the map scoreboard.
+
+        The datapack only writes the ``level`` score while the player stands
+        inside a stage box, so the stored score can be stale (it kept the old
+        value after a teleport). The position is therefore the primary source
+        and the scoreboard is only a fallback.
+        """
+        detected = self.level_at_position(self.player_position(player))
+        if detected is not None:
+            return detected
         try:
             return self.get_player_level(player)
         except (RuntimeError, ValueError):
-            detected = self.level_at_position(self.player_position(player))
-            if detected is None:
-                raise RuntimeError("Cannot tell which level the player is on — make sure they are on the map.")
-            return detected
+            raise RuntimeError(
+                "Cannot tell which level the player is on — make sure they stand on the map, "
+                "not in the lobby or below the course.") from None
 
     def _punch_arrow_command(self, player: str, minecraft_version: str = MAP_VERSION) -> str:
-        """Fire a Punch II arrow that actually hits — even with the player against a wall.
+        """Shoot an arrow *into* the player, so Punch II always lands.
 
-        Earlier versions spawned the arrow six blocks *behind* the player, so a wall
-        or a narrow corridor between the spawn point and the player blocked it. The
-        arrow is now spawned right next to the player (two blocks up, one block
-        behind, along a random horizontal direction) and flies at them with a short,
-        flat trajectory. Knockback still comes from Punch II; the small motion only
-        makes sure the arrow lands on target.
+        Version 0.21.0 spawned the arrow inside the player and let it fly away,
+        which looked like "the arrow flies from me, not at me" — and Punch II
+        knockback only applies on a real hit. Now the arrow starts one block in
+        front of the player's chest and flies back into the hitbox (0.4 blocks
+        per tick covers the gap at once). Because it starts inside the player's
+        own space, a wall behind or around them cannot block it. The knockback
+        direction comes from the arrow's flight direction, so a random angle
+        keeps the push varied.
         """
         version_match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?$", minecraft_version)
         version = tuple(map(int, version_match.groups(default="0"))) if version_match else (0, 0, 0)
@@ -1351,14 +1402,14 @@ class ParkourServer:
                         else '{levels:{"minecraft:punch":2}}')
         yaw = secrets.randbelow(36000) / 100 - 180
         radians = math.radians(yaw)
-        # The arrow spawns inside the player's hitbox (at chest height),
-        # so no wall or spawn protection can get in the way. The flight direction is random:
-        # it decides the Punch II knockback direction.
-        motion_x = math.cos(radians) * 0.65
-        motion_z = math.sin(radians) * 0.65
+        offset_x, offset_z = math.cos(radians), math.sin(radians)
+        # Start 1 block out at chest height and fly straight back through the player.
+        motion_x = -offset_x * 0.4
+        motion_z = -offset_z * 0.4
         return (
-            f'execute as {player} at @s run summon minecraft:arrow ~ ~1.1 ~ '
-            f'{{Motion:[{motion_x:.4f}d,0.02d,{motion_z:.4f}d],damage:0.5d,pickup:0b,'
+            f"execute as {player} at @s run summon minecraft:arrow "
+            f"~{offset_x:.4f} ~1.0 ~{offset_z:.4f} "
+            f'{{Motion:[{motion_x:.4f}d,0.0d,{motion_z:.4f}d],damage:0.5d,pickup:0b,'
             f'crit:0b,weapon:{{id:"minecraft:bow",count:1,components:{{"minecraft:enchantments":{enchantments}}}}}}}'
         )
 
@@ -1554,9 +1605,11 @@ class ParkourServer:
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Invalid player name.")
         x, y, z = level_checkpoint(level)
-        # `spawnpoint` keeps the map's own "back to checkpoint" working after a fall.
+        # `spawnpoint` keeps the map's own "back to checkpoint" working after a fall,
+        # and a short slow-fall keeps a mid-air checkpoint from hurting the player.
         self._rcon_checked(f"tp {player} {x:.2f} {y:.2f} {z:.2f}")
         self._rcon(f"execute as {player} at @s run spawnpoint {player} ~ ~ ~", log_failure=False)
+        self._rcon(f"effect give {player} minecraft:slow_falling 3 0 true", log_failure=False)
         self._rcon_checked(
             f"title {player} actionbar "
             + json.dumps({"text": f"LEVEL {level}/100", "color": "gold", "bold": True},
@@ -1573,80 +1626,70 @@ class ParkourServer:
                 diagnostics.warning("Could not enforce daylight: %s", exc)
                 return
 
-    # -- jail: a temporary cage around the player -----------------------------
-    JAIL_RADIUS = 1
-    JAIL_HEIGHT = 3
-
-    # Scratch area above the build limit: the cage blocks are copied there first,
-    # so the map is restored block-by-block when the sentence ends.
-    JAIL_SCRATCH_Y = 250
+    # -- jail: a temporary glass cage above the player ------------------------
+    JAIL_RADIUS = 1          # 3 x 3 footprint
+    JAIL_HEIGHT = 3          # two blocks of headroom plus the roof
+    JAIL_LIFT = 2            # the cage floor floats 2 blocks above the player's feet
 
     def jail_player(self, player: str, seconds: int = 20) -> str:
-        """Build a temporary glass cage around the player, where they already stand.
+        """Build a small floating glass cage above the player, for a few seconds.
 
-        The old jail teleported the player thousands of blocks away to the world
-        edge, which looked like a bug and lost their position. Now the player stays
-        exactly where they are and a small lit cage is built around them. The
-        original blocks are copied to a scratch area first, so the map is restored
-        perfectly when the sentence ends.
+        The cage hovers two blocks above the ground the player stands on, so the
+        course itself is never edited: there is no floor to carve out, nothing is
+        cloned to a scratch area and releasing the cage only has to clear the
+        glass it placed. The player is lifted inside and kept safe for the
+        duration; when the sentence ends they are dropped back onto the same
+        spot with the original blocks untouched.
         """
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Invalid player name.")
         position = self.player_position(player)
         if not position:
             raise RuntimeError("The player is not on the server, so there is nothing to cage.")
-        # The cage is anchored on the block the player is standing on.
-        x, y, z = math.floor(position[0]), math.floor(position[1]), math.floor(position[2])
-        radius, height = self.JAIL_RADIUS, self.JAIL_HEIGHT
-        x0, z0 = x - radius, z - radius
-        x1, z1 = x + radius, z + radius
-        y0, y1 = y - 1, y + height
-        scratch_y = self.JAIL_SCRATCH_Y
-        backup = False
-        try:
-            self._rcon_checked(
-                f"clone {x0} {y0} {z0} {x1} {y1} {z1} {x0} {scratch_y} {z0}", log_success=False)
-            backup = True
-        except Exception as exc:
-            # The cage still works, but the map blocks cannot be restored exactly.
-            diagnostics.warning("Could not back up the jail area through RCON: %s", exc)
-        self._cages[player] = {"x": x, "y": y, "z": z, "radius": radius, "height": height,
-                               "backup": backup}
+        # Anchor on the block under the player's feet, then float the cage above it.
+        block_x, block_z = math.floor(position[0]), math.floor(position[2])
+        ground_y = math.floor(position[1])
+        if ground_y < 1:
+            ground_y = math.floor(position[1] - 0.5)
+        floor_y = ground_y + 1 + self.JAIL_LIFT
+        x0, z0 = block_x - self.JAIL_RADIUS, block_z - self.JAIL_RADIUS
+        x1, z1 = block_x + self.JAIL_RADIUS, block_z + self.JAIL_RADIUS
+        roof_y = floor_y + self.JAIL_HEIGHT - 1
+        self._cages[player] = {"x0": x0, "z0": z0, "x1": x1, "z1": z1,
+                               "y0": floor_y, "y1": roof_y,
+                               "return": (block_x + 0.5, ground_y + 1.2, block_z + 0.5)}
         commands = [
-            # Solid floor under the feet, then a hollow glass box with a roof.
-            f"fill {x0} {y - 1} {z0} {x1} {y - 1} {z1} minecraft:polished_deepslate",
-            f"fill {x0} {y} {z0} {x1} {y + height - 1} {z1} minecraft:glass hollow",
-            f"fill {x0} {y + height} {z0} {x1} {y + height} {z1} minecraft:glass",
-            f"tp {player} {x + 0.5} {y + 0.2} {z + 0.5}",
-            f"effect give {player} minecraft:resistance 5 4 true",
+            # A hollow glass box with a glass floor and roof: four walls, no map edits below.
+            f"fill {x0} {floor_y} {z0} {x1} {floor_y} {z1} minecraft:tinted_glass",
+            f"fill {x0} {floor_y + 1} {z0} {x1} {roof_y - 1} {z1} minecraft:tinted_glass hollow",
+            f"fill {x0} {roof_y} {z0} {x1} {roof_y} {z1} minecraft:tinted_glass",
+            f"tp {player} {block_x + 0.5} {floor_y + 0.1} {block_z + 0.5}",
+            f"effect give {player} minecraft:resistance {min(seconds + 2, 120)} 4 true",
+            f"effect give {player} minecraft:slow_falling {min(seconds + 2, 120)} 0 true",
             f"title {player} actionbar "
             + json.dumps({"text": f"JAILED · {seconds} s", "color": "red", "bold": True},
                          separators=(",", ":")),
         ]
         for command in commands:
             self._rcon_checked(command, log_success=False)
-        diagnostics.info("Caged %s at %s/%s/%s for %s s.", player, x, y, z, seconds)
-        return f"Player is locked in a cage for {seconds} seconds."
+        diagnostics.info("Caged %s in the air above %s/%s/%s for %s s.",
+                         player, block_x, ground_y, block_z, seconds)
+        return f"Player is locked in a flying glass cage for {seconds} seconds."
 
     def release_jail(self, player: str) -> str:
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Invalid player name.")
         cage = self._cages.pop(player, None)
         if cage:
-            x, y, z = cage["x"], cage["y"], cage["z"]
-            radius, height = cage["radius"], cage["height"]
-            x0, z0 = x - radius, z - radius
-            x1, z1 = x + radius, z + radius
-            y0, y1 = y - 1, y + height
-            if cage.get("backup"):
-                # Restore the original map blocks exactly as they were.
-                restore = (f"clone {x0} {self.JAIL_SCRATCH_Y} {z0} {x1} "
-                           f"{self.JAIL_SCRATCH_Y + height + 1} {z1} {x0} {y0} {z0}")
-            else:
-                restore = f"fill {x0} {y0} {z0} {x1} {y1} {z1} minecraft:air"
+            x0, x1, z0, z1 = cage["x0"], cage["x1"], cage["z0"], cage["z1"]
+            y0, y1 = cage["y0"], cage["y1"]
+            return_x, return_y, return_z = cage["return"]
             for command in (
-                restore,
-                f"effect clear {player} minecraft:slowness",
+                # Clearing the glass is enough: the course was never touched.
+                f"fill {x0} {y0} {z0} {x1} {y1} {z1} minecraft:air",
+                f"tp {player} {return_x} {return_y} {return_z}",
+                f"effect clear {player} minecraft:resistance",
+                f"effect clear {player} minecraft:slow_falling",
                 f"title {player} actionbar "
                 + json.dumps({"text": "FREE!", "color": "green", "bold": True},
                              separators=(",", ":")),
@@ -1656,7 +1699,7 @@ class ParkourServer:
                 except Exception as exc:
                     diagnostics.warning("Could not fully release %s from the cage: %s", player, exc)
         else:
-            self._rcon(f"effect clear {player} minecraft:slowness", log_failure=False)
+            self._rcon(f"effect clear {player} minecraft:slow_falling", log_failure=False)
         self.keep_daylight()
         return "Released from jail."
 

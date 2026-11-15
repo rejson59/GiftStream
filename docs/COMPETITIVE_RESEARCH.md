@@ -60,7 +60,7 @@ GiftStream currently has normalized gift/like/follow/comment/join/share/subscrib
 ### Implemented in this update
 
 - **Per-viewer rule cooldown:** independently throttles repeats from one viewer, without suppressing other viewers when global cooldown is zero. Global and per-viewer limits can be combined, and the setting is editable in the rule form.
-- **Minecraft action fidelity and stability:** Parkour/Dropper push fires a Punch II arrow toward the player from a random direction (the arrow is weakly damaging rather than an instant teleport); fixed map-supported landing positions avoid treating datapack selector `dy` as a course elevation, and jail cells are built before teleport with a return to the configured lobby spawn.
+- **Minecraft action fidelity and stability:** Parkour/Dropper push shoots a Punch II arrow from one block in front of the player straight back into them, so it is visible as an arrow flying *at* the runner and cannot be blocked by walls (the arrow is weakly damaging rather than an instant teleport); level checkpoints come from the map's own start plates, and jail is a floating glass cage above the player so course blocks are never replaced.
 
 ### Evidence-led next milestones
 

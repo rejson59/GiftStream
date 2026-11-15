@@ -1,12 +1,15 @@
 import io
 import json
+import math
 import zipfile
 from pathlib import Path
 
 import pytest
 
 from app.parkour_server import (MAP_FILENAME, MAP_VERSION, ParkourServer, _extract_map,
-                                map_level_areas, map_level_spawn_points)
+                                _LEVEL_AREA_ORDER, _level_score_at, level_checkpoint,
+                                map_level_areas,
+                                map_level_spawn_points)
 
 
 def test_minecraft_version_options_offer_latest_stable_and_exclude_snapshots(monkeypatch):
@@ -104,16 +107,35 @@ def test_level_change_teleports_to_the_levels_own_checkpoint(monkeypatch):
     server = ParkourServer()
     commands = []
     monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
+    # Standing on the level 10 checkpoint: the position is the source of truth.
+    x10, y10, z10 = level_checkpoint(10)
     def rcon(command, **_kwargs):
         commands.append(command)
-        return "Streamer has 10 [level]" if command.startswith("scoreboard players get") else "ok"
+        if command.startswith("data get entity"):
+            return f"Streamer has the following entity data: [{x10}d, {y10}d, {z10}d]"
+        return "ok"
 
     monkeypatch.setattr(server, "_rcon", rcon)
     assert server.execute_action("parkour_level_forward") == \
         "Teleported to the checkpoint of level 11/100 (10 → 11)."
     x, y, z = level_checkpoint(11)
     assert f"tp Streamer {x:.2f} {y:.2f} {z:.2f}" in commands
-    assert commands[0] == "scoreboard players get Streamer level"
+    assert commands[0] == "data get entity Streamer Pos"
+
+
+def test_level_detection_matches_the_map_area_order():
+    """The map applies every setlevel selector in order, so overlaps follow that."""
+    server = ParkourServer()
+    # Level 52's box is partly covered by the later 74/75 boxes: the map applies
+    # its selector lines in order, so the last match wins — exactly what we do.
+    assert server.level_at_position((-122.5, 80.0, 74.5)) == 74
+    assert server.level_at_position((-122.5, 80.0, 78.5)) == 75
+    assert server.level_at_position((-123.5, 80.0, 74.5)) == 52
+    # The lobby is outside every stage: no level instead of a random one.
+    assert server.level_at_position((-74.0, 126.9, -43.0)) is None
+    # The course start and the final stage both resolve correctly.
+    assert server.level_at_position((level_checkpoint(1)[0], level_checkpoint(1)[1], level_checkpoint(1)[2])) == 1
+    assert server.level_at_position((level_checkpoint(100)[0], level_checkpoint(100)[1], level_checkpoint(100)[2])) == 100
 
 
 def test_level_change_falls_back_to_the_position_when_the_scoreboard_is_empty(monkeypatch):
@@ -143,10 +165,15 @@ def test_every_level_checkpoint_is_inside_its_stage_bounds():
     areas = map_level_areas()
     for level in range(1, 101):
         x, y, z = level_checkpoint(level)
-        area_x, area_z, dx, dz, dy = areas[level]
-        assert area_x - 1 <= x <= area_x + dx + 1
-        assert area_z - 1 <= z <= area_z + dz + 1
-        assert 0 <= y <= dy + 1
+        # Level 100 owns two areas (course stage and final arena), so any box of
+        # the level counts as inside.
+        boxes = [(ax, az, bdx, bdz, bdy) for lv, ax, az, bdx, bdz, bdy in _LEVEL_AREA_ORDER
+                 if lv == level]
+        assert any(ax - 1 <= x <= ax + bdx + 1 and az - 1 <= z <= az + bdz + 1
+                   for ax, az, bdx, bdz, _bdy in boxes), (level, x, z)
+        # The table ships inside the Python package, so it can never be missing
+        # from a packaged build (that was the "no stored checkpoint" bug).
+        assert _level_score_at(math.floor(x), math.floor(y), math.floor(z)) == level
 
 
 def test_map_extract_strips_archive_root_into_world_directory(tmp_path):
@@ -311,10 +338,11 @@ def test_push_action_uses_a_strong_sudden_shove_and_validates_player(monkeypatch
     message = server.execute_action("parkour_push")
     assert "Punch II" in message
     assert len(commands) == 1
-    # The arrow spawns inside the player hitbox, so a wall can never block it.
-    assert "execute as Streamer at @s run summon minecraft:arrow ~ ~1.1 ~" in commands[0]
+    # The arrow starts in front of the chest and flies back into the player,
+    # so it visibly flies *at* them and a wall cannot block it.
+    assert "execute as Streamer at @s run summon minecraft:arrow ~1.0000 ~1.0 ~0.0000" in commands[0]
     assert "positioned ^" not in commands[0] and "rotated" not in commands[0]
-    assert "Motion:[0.6500d,0.02d,0.0000d]" in commands[0]
+    assert "Motion:[-0.4000d,0.0d,-0.0000d]" in commands[0]
     assert '"minecraft:enchantments":{"minecraft:punch":2}' in commands[0]
     assert "damage:0.5d,pickup:0b" in commands[0]
     with pytest.raises(ValueError):
@@ -333,28 +361,27 @@ def test_punch_arrow_component_syntax_tracks_minecraft_release(monkeypatch):
         server._punch_arrow_command("Streamer", "1.20.4")
 
 
-def test_parkour_jail_builds_safe_cell_before_teleport(monkeypatch):
+def test_parkour_jail_builds_a_floating_glass_cage(monkeypatch):
     server = ParkourServer()
     commands = []
     monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
     monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
 
     monkeypatch.setattr(server, "player_position", lambda _player: (-4.5, 90.0, 2.5))
-    assert server.execute_action("parkour_jail") == "Player is locked in a cage for 20 seconds."
-    # The cage is built around the player, never a teleport to another place.
-    # The original blocks are copied to a scratch area first, so the map can be
-    # restored exactly when the sentence ends.
-    assert commands[0] == "clone -6 89 1 -4 93 3 -6 250 1"
-    assert commands[1:4] == [
-        "fill -6 89 1 -4 89 3 minecraft:polished_deepslate",
-        "fill -6 90 1 -4 92 3 minecraft:glass hollow",
-        "fill -6 93 1 -4 93 3 minecraft:glass",
-    ]
-    assert commands[4] == "tp Streamer -4.5 90.2 2.5"
+    assert server.execute_action("parkour_jail") == \
+        "Player is locked in a flying glass cage for 20 seconds."
+    # The cage floats two blocks above the ground: no map block is ever replaced,
+    # so nothing can be destroyed and no scratch clone is needed.
+    assert commands[0] == "fill -6 93 1 -4 93 3 minecraft:tinted_glass"
+    assert commands[1] == "fill -6 94 1 -4 94 3 minecraft:tinted_glass hollow"
+    assert commands[2] == "fill -6 95 1 -4 95 3 minecraft:tinted_glass"
+    assert commands[3] == "tp Streamer -4.5 93.1 2.5"
+    assert not any(command.startswith("clone") for command in commands)
+    assert not any("polished_deepslate" in command for command in commands)
     assert all("1000" not in command for command in commands)
 
 
-def test_jail_release_removes_the_cage_and_keeps_the_player_in_place(monkeypatch):
+def test_jail_release_removes_the_cage_and_drops_the_player_back(monkeypatch):
     server = ParkourServer()
     commands = []
     monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
@@ -370,10 +397,10 @@ def test_jail_release_removes_the_cage_and_keeps_the_player_in_place(monkeypatch
     server.execute_action("parkour_jail")
     commands.clear()
     server.release_jail("Streamer")
-    assert commands[0] == "clone -6 250 1 -4 254 3 -6 89 1"
-    assert not any(command.endswith("minecraft:air") for command in commands)
+    assert commands[0] == "fill -6 93 1 -4 95 3 minecraft:air"
+    # Back exactly onto the block the player was standing on.
+    assert commands[1] == "tp Streamer -4.5 91.2 2.5"
     assert any("FREE!" in command for command in commands)
-    assert all(command.startswith("tp") is False for command in commands)
 
 
 @pytest.mark.parametrize(("action", "commands", "message"), [
@@ -829,7 +856,8 @@ def test_dropper_push_is_a_sudden_strong_shove(monkeypatch):
     monkeypatch.setattr("app.parkour_server.secrets.randbelow", lambda _limit: 0)
     assert "Punch II" in server.execute_action("dropper_push")
     assert len(commands) == 1
-    assert "execute as Streamer at @s run summon minecraft:arrow ~ ~1.1 ~" in commands[0]
+    assert "execute as Streamer at @s run summon minecraft:arrow ~-1.0000 ~1.0" in commands[0]
+    assert "Motion:[0.4000d,0.0d,0.0000d]" in commands[0]
     assert '"minecraft:enchantments":{"minecraft:punch":2}' in commands[0]
 
 
