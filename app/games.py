@@ -49,9 +49,9 @@ GAMES = [
         "status": "bridge",
         "integration": "GiftStream Local Minecraft",
         "icon": "🪂",
-        "tagline": "Pięć pionowych poziomów, widzowie sterują zrzutem.",
-        "description": "Dropper Arena to lokalnie generowana mapa vanilla z pięcioma pionowymi szybami i wodnymi lądowiskami. Akcje widzów obejmują push, skok między poziomami, reset oraz krótkie efekty. Nie wymaga pluginów ani modów.",
-        "ideas": ["Róża → push", "Donut → wyższy poziom", "Ice Cream → niższy poziom", "Castle → reset"],
+        "tagline": "100 poziomów Droppera sterowanych przez widzów.",
+        "description": "GiftStream generuje lokalnie 100 kolorowych poziomów Droppera z różnymi przeszkodami, wodnymi checkpointami i automatycznym awansem po lądowaniu. Widzowie mogą wystrzelić strzałę Punch II, pominąć lub cofnąć poziom, albo zresetować próbę. Nie wymaga pluginów ani modów.",
+        "ideas": ["Róża → Punch II", "Donut → następny poziom", "Ice Cream → poprzedni poziom", "Castle → reset"],
         "preset_id": "minecraft-dropper",
         "rules": [
             _rule("md-push", "Róża → push", {"type": "gift", "gift_name": "Rose"}, {"type": "dropper_push"}, "🌹 Push w szybie!"),

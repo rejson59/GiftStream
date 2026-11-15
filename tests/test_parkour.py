@@ -676,7 +676,7 @@ def test_dropper_setup_uses_separate_vanilla_world_without_external_map(tmp_path
     settings = json.loads((tmp_path / "settings.json").read_text())
     assert result["game_mode"] == "dropper"
     assert settings["game_mode"] == "dropper"
-    assert settings["map_version"] == "Dropper Arena 1.0"
+    assert settings["map_version"] == "GiftStream Dropper 100 Levels 2.0"
     assert (root / "server.jar").is_file()
     assert not (root / "world" / "level.dat").exists()
 
@@ -694,12 +694,73 @@ def test_dropper_map_generation_is_bounded_and_idempotent(tmp_path, monkeypatch)
     server.initialize_dropper_map()
     stored = json.loads(settings_path.read_text())
     assert stored["dropper_map_initialized"] is True
-    assert sum(command.startswith("fill ") for command in commands) == 60
-    assert any("minecraft:water" in command for command in commands)
-    assert any("minecraft:glass" in command for command in commands)
-    assert any("minecraft:orange_stained_glass" in command for command in commands)
+    assert sum(command.startswith("fill ") for command in commands) == 905
+    assert sum("minecraft:water" in command for command in commands) == 100
+    assert sum(command.endswith("hollow") for command in commands) == 100
+    assert any("minecraft:cyan_stained_glass" in command for command in commands)
+    assert any("minecraft:green_stained_glass" in command for command in commands)
+    assert "dropper_map_version" in stored and stored["dropper_map_version"] == 2
+    assert stored["map_version"] == "GiftStream Dropper 100 Levels 2.0"
     server.initialize_dropper_map()
-    assert len(commands) == 66
+    assert len(commands) == 911
+
+
+def test_dropper_generation_backs_up_overlapping_world_regions_before_edits(tmp_path, monkeypatch):
+    from app import parkour_server
+
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", tmp_path / "settings.json")
+    server_dir = tmp_path / "MinecraftDropper"
+    source = server_dir / "world" / "region" / "r.0.0.mca"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"pre-existing-world-region")
+    state = {"game_mode": "dropper", "server_dir": str(server_dir),
+             "dropper_map_initialized": False, "dropper_player_levels": {}}
+    parkour_server._write_parkour_settings(state)
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "_rcon", lambda command, **_kwargs: commands.append(command) or "ok")
+
+    server.initialize_dropper_map()
+
+    backups = list((server_dir / "backups").glob("dropper-map-v2-*/region/r.0.0.mca"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"pre-existing-world-region"
+    assert commands.index("save-off") < next(i for i, command in enumerate(commands) if command.startswith("fill "))
+    assert commands.index("save-on") < next(i for i, command in enumerate(commands) if command.startswith("fill "))
+
+
+def test_dropper_has_100_distinct_grid_cells_and_parses_entity_position():
+    server = ParkourServer()
+    assert server._dropper_lane(-3) == 1
+    assert server._dropper_lane(101) == 100
+    assert server._dropper_cell(1) == (0, 0)
+    assert server._dropper_cell(100) == (144, 144)
+    assert server._parse_dropper_position(
+        "Streamer has the following entity data: [52.5d, 66.0d, 20.5d]") == (52.5, 66.0, 20.5)
+    assert server._parse_dropper_position("No entity data") is None
+
+
+def test_dropper_water_landing_advances_and_final_stage_records_win(tmp_path, monkeypatch):
+    from app import parkour_server
+
+    monkeypatch.setattr(parkour_server, "SETTINGS_PATH", tmp_path / "settings.json")
+    server = ParkourServer()
+    state = {"dropper_player_levels": {"Streamer": 14}, "dropper_completed_players": {}}
+    commands = []
+    monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
+
+    assert server._dropper_progress(state, "Streamer", (52.5, 66.0, 20.5)) == \
+        "Poziom 14/100 zaliczony — start poziomu 15/100!"
+    assert state["dropper_player_levels"]["Streamer"] == 15
+    assert "tp Streamer 68 127 20" in commands
+    assert server._dropper_progress(state, "Streamer", (52.5, 80.0, 20.5)) is None
+
+    state["dropper_player_levels"]["Streamer"] = 100
+    final_x, final_z = server._dropper_cell(100)
+    result = server._dropper_progress(state, "Streamer", (final_x + 4.5, 66.0, final_z + 4.5))
+    assert result == "Ukończono wszystkie 100 poziomów Droppera!"
+    assert state["dropper_completed_players"]["Streamer"] is True
+    assert any("100 LEVELS COMPLETE!" in command for command in commands)
 
 
 def test_dropper_push_is_a_sudden_strong_shove(monkeypatch):
@@ -728,9 +789,9 @@ def test_dropper_level_actions_clamp_and_persist_stage(tmp_path, monkeypatch):
     commands = []
     monkeypatch.setattr(server, "settings", lambda: state)
     monkeypatch.setattr(server, "_rcon", lambda command: commands.append(command) or "ok")
-    assert "szybu 5 z 5" in server.execute_action("dropper_level_forward")
+    assert "poziom 6/100" in server.execute_action("dropper_level_forward")
+    assert state["dropper_player_levels"]["Streamer"] == 6
+    assert "poziom 5/100" in server.execute_action("dropper_level_back")
     assert state["dropper_player_levels"]["Streamer"] == 5
-    assert "szybu 4 z 5" in server.execute_action("dropper_level_back")
-    assert state["dropper_player_levels"]["Streamer"] == 4
-    assert "tp Streamer 58 127 4" in commands
-    assert any('DROPPER · SZYB 4/5' in command for command in commands)
+    assert "tp Streamer 68 127 4" in commands
+    assert any('LEVEL 5 / 100' in command for command in commands)

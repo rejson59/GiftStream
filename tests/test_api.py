@@ -417,7 +417,7 @@ def test_rule_editor_has_searchable_gift_picker_and_audio_upload_controls():
     assert 'id="parkour-game-mode"' in page
     assert 'id="language-select"' in page
     assert '/static/i18n.js' in page
-    assert 'Minecraft Dropper · 5 szybów' in page
+    assert 'Minecraft Dropper · 100 Levels' in page
 
 
 def test_gift_library_search_passes_the_name_query_to_the_catalog(monkeypatch):

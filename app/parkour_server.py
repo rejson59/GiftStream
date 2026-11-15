@@ -792,7 +792,7 @@ class ParkourServer:
             state = {"server_dir": str(root), "player": player,
                      "rcon_host": "127.0.0.1", "rcon_port": 25575,
                      "server_address": "localhost:25565", "minecraft_version": installed_version,
-                     "map_version": MAP_VERSION if game_mode == "parkour" else "Dropper Arena 1.0",
+                     "map_version": MAP_VERSION if game_mode == "parkour" else "GiftStream Dropper 100 Levels 2.0",
                      "game_mode": game_mode, "dropper_map_initialized": False,
                      "java_required": required_java, "java_executable": str(java_executable), "server_jar": str(jar)}
             _write_parkour_settings({**state, "rcon_password": password})
@@ -921,14 +921,15 @@ class ParkourServer:
                 diagnostics.warning("Polecenie RCON '%s' nie powiodło się: %s", command_kind, exc)
             raise
 
-    def _rcon_checked(self, command: str) -> str:
+    def _rcon_checked(self, command: str, *, log_success: bool = True) -> str:
         """Reject vanilla error responses; RCON otherwise returns syntax/target errors as text."""
         result = self._rcon(command)
         if _RCON_COMMAND_ERROR.search(result):
             command_kind = command.split(maxsplit=1)[0] if command else "<empty>"
             diagnostics.error("Minecraft odrzucił polecenie RCON '%s': %s", command_kind, result[:500])
             raise RuntimeError(f"Minecraft odrzucił polecenie '{command_kind}': {result[:500]}")
-        diagnostics.info("Minecraft odpowiedział na RCON '%s': %s", command.split(maxsplit=1)[0], result[:300])
+        if log_success:
+            diagnostics.info("Minecraft odpowiedział na RCON '%s': %s", command.split(maxsplit=1)[0], result[:300])
         return result
 
     def status(self) -> dict[str, Any]:
@@ -957,6 +958,7 @@ class ParkourServer:
                     "minecraft_version": state.get("minecraft_version", MAP_VERSION),
                     "map_version": state.get("map_version", MAP_VERSION),
                     "game_mode": state.get("game_mode", "parkour"),
+                    "dropper_completed": bool(state.get("dropper_completed_players", {}).get(str(state.get("player", "")))),
                     "dropper_stage": self._dropper_lane(stage_value) if state.get("game_mode") == "dropper" else None,
                     "java_required": state.get("java_required"),
                     "security_warning": "Tryb offline nie weryfikuje kont Microsoft. Serwer jest przeznaczony wyłącznie do połączeń lokalnych — nie wystawiaj portów 25565/25575 do Internetu.",
@@ -1010,6 +1012,20 @@ class ParkourServer:
                              "players_online": int(player_match.group(1)) if player_match else len(players),
                              "players": players,
                              "message": "Minecraft gotowy · " + (listing or "RCON połączony")})
+            if (state.get("game_mode") == "dropper"
+                    and any(name.casefold() == str(state.get("player", "")).casefold() for name in players)):
+                player = str(state.get("player", ""))
+                try:
+                    position_output = self._rcon(f"data get entity {player} Pos", log_failure=False)
+                    position = self._parse_dropper_position(position_output)
+                    if position:
+                        self._dropper_progress(state, player, position)
+                except Exception as exc:
+                    diagnostics.warning("Nie udało się sprawdzić lądowania Droppera: %s", exc)
+                state = self.settings()
+                stage_map = state.get("dropper_player_levels", {})
+                response["dropper_stage"] = self._dropper_lane(stage_map.get(player, 1)) if isinstance(stage_map, dict) else 1
+                response["dropper_completed"] = bool(state.get("dropper_completed_players", {}).get(player))
             self._rcon_retry_delay = 1.0
             # The dashboard polls more often than this; serve the cached ready result
             # between probes to avoid opening a fresh RCON socket on every refresh.
@@ -1077,53 +1093,151 @@ class ParkourServer:
 
     @staticmethod
     def _dropper_lane(stage: int) -> int:
-        return max(1, min(5, int(stage)))
+        return max(1, min(100, int(stage)))
+
+    @staticmethod
+    def _dropper_cell(stage: int) -> tuple[int, int]:
+        stage = ParkourServer._dropper_lane(stage) - 1
+        return (stage % 10) * 16, (stage // 10) * 16
 
     def _dropper_teleport(self, player: str, stage: int) -> None:
         stage = self._dropper_lane(stage)
-        lane = stage - 1
-        x = lane * 18 + 4
-        self._rcon_checked(f"tp {player} {x} 127 4")
-        self._rcon_checked(f"effect give {player} minecraft:slow_falling 3 0 true")
-        title = json.dumps({"text": f"DROPPER · SZYB {stage}/5", "color": "aqua", "bold": True},
+        x0, z0 = self._dropper_cell(stage)
+        self._rcon_checked(f"tp {player} {x0 + 4} 127 {z0 + 4}")
+        title = json.dumps({"text": f"LEVEL {stage} / 100", "color": "aqua", "bold": True},
                            ensure_ascii=False, separators=(",", ":"))
         self._rcon_checked(f"title {player} actionbar {title}")
 
+    @staticmethod
+    def _parse_dropper_position(output: str) -> tuple[float, float, float] | None:
+        number = r"(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)[dDfF]?"
+        match = re.search(rf"\[\s*{number}\s*,\s*{number}\s*,\s*{number}\s*\]", output)
+        return tuple(map(float, match.groups())) if match else None
+
+    def _dropper_progress(self, state: dict[str, Any], player: str,
+                          position: tuple[float, float, float]) -> str | None:
+        """Auto-advance only when the configured player lands in their current water pool."""
+        levels = state.setdefault("dropper_player_levels", {})
+        stage = self._dropper_lane(levels.get(player, 1))
+        completed = state.setdefault("dropper_completed_players", {})
+        if completed.get(player):
+            return None
+        x, y, z = position
+        x0, z0 = self._dropper_cell(stage)
+        if not (65.5 <= y <= 68.5 and x0 - 0.25 <= x <= x0 + 9.25
+                and z0 - 0.25 <= z <= z0 + 9.25):
+            return None
+        if stage >= 100:
+            completed[player] = True
+            _write_parkour_settings(state)
+            title = json.dumps({"text": "100 LEVELS COMPLETE!", "color": "gold", "bold": True},
+                               ensure_ascii=False, separators=(",", ":"))
+            self._rcon_checked(f"title {player} title {title}")
+            diagnostics.info("Gracz %s ukończył 100-poziomową mapę Dropper.", player)
+            return "Ukończono wszystkie 100 poziomów Droppera!"
+        next_stage = stage + 1
+        self._dropper_teleport(player, next_stage)
+        levels[player] = next_stage
+        completed.pop(player, None)
+        _write_parkour_settings(state)
+        diagnostics.info("Gracz %s zaliczył poziom Droppera %s/100.", player, stage)
+        return f"Poziom {stage}/100 zaliczony — start poziomu {next_stage}/100!"
+
     def initialize_dropper_map(self) -> None:
-        """Build a compact five-stage vanilla Dropper arena once, without third-party plugins."""
+        """Generate a bounded, replayable 100-stage vanilla Dropper with no third-party plugins."""
         state = self.settings()
-        if state.get("game_mode") != "dropper" or state.get("dropper_map_initialized"):
+        if (state.get("game_mode") != "dropper"
+                or (state.get("dropper_map_initialized") and state.get("dropper_map_version") == 2)):
             return
-        diagnostics.info("Buduję pięć szybów Droppera w świecie vanilla.")
-        lane_glass = ("orange_stained_glass", "cyan_stained_glass", "magenta_stained_glass",
-                      "lime_stained_glass", "yellow_stained_glass")
-        for index, color in enumerate(lane_glass):
-            x0 = index * 18
-            x1, x2 = x0 - 1, x0 + 9
-            z1, z2 = -1, 9
-            self._rcon_checked(f"fill {x1} 65 {z1} {x2} 126 {z2} minecraft:{color}")
-            self._rcon_checked(f"fill {x0} 66 0 {x0 + 8} 125 8 minecraft:air")
-            self._rcon_checked(f"fill {x0 + 3} 126 3 {x0 + 5} 126 5 minecraft:air")
-            for obstacle_y, hole_x, hole_z in ((112, 1, 1), (98, 5, 1), (84, 1, 5), (72, 5, 5)):
-                self._rcon_checked(f"fill {x0} {obstacle_y} 0 {x0 + 8} {obstacle_y} 8 minecraft:glass")
-                self._rcon_checked(f"fill {x0 + hole_x} {obstacle_y} {hole_z} {x0 + hole_x + 2} {obstacle_y} {hole_z + 2} minecraft:air")
-            self._rcon_checked(f"fill {x0} 66 0 {x0 + 8} 66 8 minecraft:water")
+        diagnostics.info("Buduję mapę vanilla Dropper 100 Levels (100 komór, 3 przeszkody każda).")
+        def build(command: str) -> str:
+            return self._rcon_checked(command, log_success=False)
+        # Snapshot the small set of existing world region files touched by the
+        # migration/generator before issuing any block edits. If a backup cannot
+        # be made, fail closed rather than risk overwriting a user's local builds.
+        server_dir = Path(str(state.get("server_dir", "")))
+        world_dir = server_dir / "world"
+        region_ids = {f"{rx}.{rz}" for rx in (-1, 0) for rz in (-1, 0)}
+        backup_sources = [world_dir / directory / f"r.{region_id}.mca"
+                          for directory in ("region", "entities", "poi")
+                          for region_id in region_ids]
+        existing_sources = [path for path in backup_sources if path.is_file()]
+        if existing_sources:
+            try:
+                self._rcon_checked("save-all flush", log_success=False)
+                self._rcon_checked("save-off", log_success=False)
+                backup_dir = server_dir / "backups" / f"dropper-map-v2-{time.strftime('%Y%m%d-%H%M%S')}"
+                try:
+                    for source in existing_sources:
+                        destination = backup_dir / source.relative_to(world_dir)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, destination)
+                    (backup_dir / "README.txt").write_text(
+                        "Pre-migration backup of Minecraft world region files that overlap the generated Dropper 100 Levels arena.\n"
+                        "Original world files remain in ../world; this snapshot is retained for manual recovery.\n",
+                        encoding="utf-8")
+                    diagnostics.info("Zabezpieczono %s plików regionów świata przed generowaniem Droppera: %s",
+                                     len(existing_sources), backup_dir)
+                finally:
+                    self._rcon_checked("save-on", log_success=False)
+            except Exception as exc:
+                diagnostics.error("Nie udało się wykonać kopii regionów przed generowaniem Droppera: %s", exc)
+                raise RuntimeError("Nie udało się zabezpieczyć świata Minecraft; mapa Dropper nie została zmieniona.") from exc
+        # Remove the former five-lane arena only in its documented bounds; preserve
+        # every other part of the user's local world before replacing the minigame.
+        for old_lane in range(5):
+            old_x = old_lane * 18
+            build(f"fill {old_x - 1} 65 -1 {old_x + 9} 126 9 minecraft:air")
+        glass_colors = ("cyan_stained_glass", "orange_stained_glass", "magenta_stained_glass",
+                        "lime_stained_glass", "purple_stained_glass", "yellow_stained_glass",
+                        "light_blue_stained_glass", "red_stained_glass", "pink_stained_glass",
+                        "green_stained_glass")
+        obstacle_colors = ("light_gray_stained_glass", "blue_stained_glass", "orange_stained_glass",
+                           "magenta_stained_glass", "lime_stained_glass")
+        for stage in range(1, 101):
+            x0, z0 = self._dropper_cell(stage)
+            color = glass_colors[(stage - 1) // 10]
+            build(
+                f"fill {x0 - 1} 65 {z0 - 1} {x0 + 9} 126 {z0 + 9} minecraft:{color} hollow")
+            # A 3×3 entrance lets the player drop from the checkpoint above the shaft.
+            build(f"fill {x0 + 3} 126 {z0 + 3} {x0 + 5} 126 {z0 + 5} minecraft:air")
+            build(f"fill {x0} 66 {z0} {x0 + 8} 66 {z0 + 8} minecraft:water")
+            for layer, y in enumerate((110, 92, 74)):
+                # Deterministic pseudo-random routes make all 100 stages distinct
+                # and reproducible when migrating an older local Dropper world.
+                hole_size = 3 if stage <= 20 else 2
+                hole_x = (stage * 3 + layer * 4) % (10 - hole_size)
+                hole_z = (stage * 5 + layer * 2) % (10 - hole_size)
+                obstacle = obstacle_colors[(stage + layer) % len(obstacle_colors)]
+                build(
+                    f"fill {x0} {y} {z0} {x0 + 8} {y} {z0 + 8} minecraft:{obstacle}")
+                build(
+                    f"fill {x0 + hole_x} {y} {z0 + hole_z} "
+                    f"{x0 + hole_x + hole_size - 1} {y} {z0 + hole_z + hole_size - 1} minecraft:air")
+            if stage % 10 == 0:
+                diagnostics.info("Wygenerowano szyby Droppera %s/100.", stage)
         for command in ("gamerule keepInventory true", "gamerule doMobSpawning false",
                         "gamerule doDaylightCycle false", "time set noon", "weather clear",
                         "setworldspawn 4 127 4"):
-            self._rcon_checked(command)
+            build(command)
+        levels = state.get("dropper_player_levels", {})
         state["dropper_map_initialized"] = True
-        state["dropper_player_levels"] = {}
+        state["dropper_map_version"] = 2
+        state["map_version"] = "GiftStream Dropper 100 Levels 2.0"
+        state["dropper_player_levels"] = ({str(player): self._dropper_lane(stage)
+                                          for player, stage in levels.items()}
+                                         if isinstance(levels, dict) else {})
+        state["dropper_completed_players"] = {}
         _write_parkour_settings(state)
         player = str(state.get("player", ""))
         if PLAYER_RE.fullmatch(player):
             try:
                 self._rcon("list", log_failure=False)
-                self._dropper_teleport(player, 1)
+                self._dropper_teleport(player, state["dropper_player_levels"].get(player, 1))
             except Exception:
                 # The map is ready even if the streamer has not joined the server yet.
                 pass
-        diagnostics.info("Dropper Arena v1 gotowa: 5 szyb, szklane przeszkody i wodne lądowiska.")
+        diagnostics.info("Dropper 100 Levels v2 gotowy: 100 tras, 3 przeszkody na poziom, wodne checkpointy.")
 
     def get_player_level(self, player: str) -> int:
         if not PLAYER_RE.fullmatch(player or ""):
@@ -1174,14 +1288,16 @@ class ParkourServer:
             if action in {"dropper_level_forward", "dropper_level_back"}:
                 stage = self._dropper_lane(stage + (1 if action.endswith("forward") else -1))
                 levels[player] = stage
+                state.setdefault("dropper_completed_players", {}).pop(player, None)
                 self._dropper_teleport(player, stage)
                 _write_parkour_settings(state)
-                return f"Przeniesiono gracza do szybu {stage} z 5."
+                return f"Przeniesiono gracza na poziom {stage}/100."
             if action == "dropper_reset":
                 levels[player] = 1
+                state.setdefault("dropper_completed_players", {}).pop(player, None)
                 self._dropper_teleport(player, 1)
                 _write_parkour_settings(state)
-                return "Powrót na górę pierwszego szybu Droppera."
+                return "Powrót na pierwszy poziom Droppera."
             effects = {
                 "dropper_speed": ([f"effect give {player} minecraft:speed 8 1 true"], "Sprint przez 8 sekund!"),
                 "dropper_slow": ([f"effect give {player} minecraft:slowness 7 1 true"], "Spowolnienie przez 7 sekund!"),
