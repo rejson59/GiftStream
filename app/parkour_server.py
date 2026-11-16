@@ -818,8 +818,8 @@ class ParkourServer:
         self._rcon_retry_delay = 1.0
         self._last_status_ready: bool | None = None
         self._last_status_snapshot: dict[str, Any] | None = None
-        # Active jail cages: player -> cage position and size (for cleanup).
-        self._cages: dict[str, dict[str, int]] = {}
+        # Active jail cages: player -> cage bounds and the original return position.
+        self._cages: dict[str, dict[str, Any]] = {}
         self._last_daylight_check = 0.0
         self._status_lock = threading.RLock()
         self._last_logged_exit: int | None = None
@@ -1914,27 +1914,35 @@ class ParkourServer:
     # -- jail: a temporary glass cage above the player ------------------------
     JAIL_RADIUS = 1          # 3 x 3 footprint
     JAIL_HEIGHT = 4          # two blocks of wall plus the roof
-    JAIL_LIFT = 2            # the cage floor floats 2 blocks above the ground
+    # Bundled course blocks end below y=190; its barrier ceiling is at y=255.
+    # Build the jail in the clear gap so course blocks cannot leave holes or shove
+    # the player out of the cage floor.
+    JAIL_SKY_FLOOR_Y = 200
     JAIL_MATERIAL = "minecraft:iron_bars"   # see-through cage walls
     JAIL_FLOOR = "minecraft:glass"          # floor and roof
 
     def jail_player(self, player: str, seconds: int = DEFAULT_JAIL_SECONDS) -> str:
-        """Build a small floating cage around the player, for a few seconds.
+        """Teleport the player into a clear sky cell for a few seconds.
 
-        The cage hovers above the ground the player stands on, so it is clear of
-        the course. Every block is placed with ``keep``, which only fills space
-        that is still air: the cage can therefore never overwrite — let alone
-        destroy — a map block, not even on a 1-block corridor where a wall sits
-        exactly on the cage edge. Releasing it only replaces the cage material
-        back with air (``replace`` filter), so the world is left untouched.
+        The bundled course has ceilings and other blocks at the player's height;
+        a cage built there can have holes, and teleporting into its floor causes
+        collision jitter. The jail therefore sits in the clear air above the course
+        and below the map's y=255 barrier ceiling. Every block is still placed
+        with ``keep`` and only jail materials are removed on release, so the course
+        is never overwritten or destroyed.
         """
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Invalid player name.")
         seconds = normalize_jail_seconds(seconds)
         if player in self._cages:
-            # A repeated follow should extend the existing cage, not build a
-            # second cage above the first one or overwrite the original return point.
+            # A repeated follow extends the sentence, preserves the first return
+            # point, and puts the player back in the cell if they somehow escaped.
+            cage = self._cages[player]
+            jail_x = (cage["x0"] + cage["x1"]) / 2 + 0.5
+            jail_z = (cage["z0"] + cage["z1"]) / 2 + 0.5
+            floor_y = cage["y0"]
             commands = [
+                f"tp {player} {jail_x:.1f} {floor_y + 1.1:.1f} {jail_z:.1f}",
                 f"effect give {player} minecraft:resistance {min(seconds + 2, 120)} 4 true",
                 f"effect give {player} minecraft:slow_falling {min(seconds + 2, 120)} 0 true",
                 f"title {player} actionbar "
@@ -1952,7 +1960,7 @@ class ParkourServer:
         # The block under the feet: feet on a block boundary (y = 90.0) means the
         # player stands on block 89, otherwise they are above block 90.
         ground_y = math.floor(position[1]) - (0 if position[1] % 1 else 1)
-        floor_y = ground_y + 1 + self.JAIL_LIFT
+        floor_y = self.JAIL_SKY_FLOOR_Y
         x0, z0 = block_x - self.JAIL_RADIUS, block_z - self.JAIL_RADIUS
         x1, z1 = block_x + self.JAIL_RADIUS, block_z + self.JAIL_RADIUS
         wall_top = floor_y + self.JAIL_HEIGHT - 1
@@ -1961,7 +1969,8 @@ class ParkourServer:
                                "return": (block_x + 0.5, ground_y + 1.2, block_z + 0.5)}
         material = self.JAIL_MATERIAL
         commands = [
-            # Floor and roof.
+            # Floor and roof. Stand on top of the floor block at y=201.1
+            # (not inside it), with two clear blocks for the player.
             f"fill {x0} {floor_y} {z0} {x1} {floor_y} {z1} {self.JAIL_FLOOR} keep",
             f"fill {x0} {wall_top} {z0} {x1} {wall_top} {z1} {self.JAIL_FLOOR} keep",
             # Four walls, each one a 3-wide, 2-high slab of bars.
@@ -1969,7 +1978,7 @@ class ParkourServer:
             f"fill {x0} {floor_y + 1} {z1} {x1} {wall_top - 1} {z1} {material} keep",
             f"fill {x0} {floor_y + 1} {z0} {x0} {wall_top - 1} {z1} {material} keep",
             f"fill {x1} {floor_y + 1} {z0} {x1} {wall_top - 1} {z1} {material} keep",
-            f"tp {player} {block_x + 0.5} {floor_y + 0.1} {block_z + 0.5}",
+            f"tp {player} {block_x + 0.5} {floor_y + 1.1:.1f} {block_z + 0.5}",
             f"effect give {player} minecraft:resistance {min(seconds + 2, 120)} 4 true",
             f"effect give {player} minecraft:slow_falling {min(seconds + 2, 120)} 0 true",
             f"title {player} actionbar "
@@ -1978,8 +1987,7 @@ class ParkourServer:
         ]
         for command in commands:
             self._rcon_checked(command, log_success=False)
-        diagnostics.info("Caged %s in the air above %s/%s/%s for %s s.",
-                         player, block_x, ground_y, block_z, seconds)
+        diagnostics.info("Caged %s in the sky above the map for %s s.", player, seconds)
         return f"Player is locked in a flying glass cage for {seconds} seconds."
 
     def release_jail(self, player: str) -> str:
