@@ -141,4 +141,18 @@ jobs:
             if ($LASTEXITCODE -ne 0) { Write-Host "::warning::Nie udało się usunąć wydania $($entry.Tag)" }
             $removed++
           }
-          Write-Host "Zostawiono: $($keep -join ', '); usunięto: $removed"
+          # Tagi bez wydania (np. wydanie usunięte ręcznie) też muszą zniknąć.
+          $tags = git ls-remote --tags origin |
+            ForEach-Object { ($_ -split "`t")[1] -replace '^refs/tags/', '' } |
+            Where-Object { $_ -notmatch '\^{}$' }
+          $removedTags = 0
+          foreach ($tag in $tags) {
+            if ($keep -contains $tag) { continue }
+            $parsed = $null
+            if (-not [version]::TryParse($tag.TrimStart('v'), [ref]$parsed)) { continue }
+            Write-Host "Usuwam stary tag $tag"
+            git push origin --delete $tag
+            if ($LASTEXITCODE -ne 0) { Write-Host "::warning::Nie udało się usunąć tagu $tag" }
+            $removedTags++
+          }
+          Write-Host "Zostawiono: $($keep -join ', '); usunięte wydania: $removed; usunięte tagi: $removedTags"
