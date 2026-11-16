@@ -114,12 +114,13 @@ def test_the_translator_rewrites_text_and_restores_english():
     global.window = {addEventListener() {}, dispatchEvent() {}};
     global.queueMicrotask = fn => fn();
     global.MutationObserver = class { observe() {} };
-    require('""" + str(WEB / "i18n.js") + """');
+    require(process.argv[1]);
     localStorage.setItem('giftstream-language', 'pl');
     console.log(window.GiftStreamI18n.t('Dashboard') + '|' + window.GiftStreamI18n.t('Next level'));
     localStorage.setItem('giftstream-language', 'en');
     console.log(window.GiftStreamI18n.t('Dashboard') + '|' + window.GiftStreamI18n.t('Unknown string'));
     """
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=60)
+    result = subprocess.run([node, "-e", script, str(WEB / "i18n.js")], capture_output=True, text=True,
+                            timeout=60)
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["Pulpit|Następny level", "Dashboard|Unknown string"]

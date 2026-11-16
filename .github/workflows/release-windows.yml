@@ -113,3 +113,32 @@ jobs:
               release-assets/checksums.txt `
               release-assets/GiftStream-Browser-Relay.zip
           }
+
+      - name: Usuń starsze wydania i tagi (zostają dwa ostatnie)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $current = $env:RELEASE_TAG.TrimStart('v')
+          $releases = gh release list --repo $env:GITHUB_REPOSITORY --limit 200 --json tagName,isDraft |
+            ConvertFrom-Json | Where-Object { -not $_.isDraft } | ForEach-Object { $_.tagName }
+          $versions = @()
+          foreach ($tag in $releases) {
+            $clean = $tag.TrimStart('v')
+            $parsed = $null
+            if ([version]::TryParse($clean, [ref]$parsed)) {
+              $versions += [pscustomobject]@{ Tag = $tag; Version = $parsed }
+            }
+          }
+          $sorted = $versions | Sort-Object Version -Descending
+          $keep = @($sorted | Select-Object -First 2 | ForEach-Object { $_.Tag })
+          if ($keep -notcontains $env:RELEASE_TAG) { $keep += $env:RELEASE_TAG }
+          $removed = 0
+          foreach ($entry in $sorted) {
+            if ($keep -contains $entry.Tag) { continue }
+            Write-Host "Usuwam stare wydanie $($entry.Tag)"
+            gh release delete $entry.Tag --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
+            if ($LASTEXITCODE -ne 0) { Write-Host "::warning::Nie udało się usunąć wydania $($entry.Tag)" }
+            $removed++
+          }
+          Write-Host "Zostawiono: $($keep -join ', '); usunięto: $removed"
