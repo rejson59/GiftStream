@@ -10,7 +10,7 @@ The panel runs in a native GiftStream window with embedded Microsoft Edge WebVie
 
 At startup and then every 30 minutes GiftStream checks the newest GitHub release. An update is downloaded as a new `GiftStream.exe`, verified with SHA-256 and stored in the version directory. If an update is found during startup, GiftStream launches it before showing the window. If the download finishes inside a running Windows app, GiftStream automatically starts the new version and closes the old one. That can briefly interrupt event reception; the TikTok stream itself keeps running, but the app may need to reconnect afterwards. The update bar also has a manual retry button, and **Check for updates** starts a check by hand.
 
-A release contains only `GiftStream.exe` and `checksums.txt`. The workflow `.github/workflows/release-windows.yml` builds the single application file after a `vX.Y.Z` tag is created.
+Each release contains `GiftStream.exe`, `checksums.txt`, and the `GiftStream-Browser-Relay.zip` browser relay. The workflow `.github/workflows/release-windows.yml` runs on a `vX.Y.Z` tag, verifies the tag against `app/version.py`, runs the test suite, builds the Windows app and publishes those assets. The app updater downloads and verifies `GiftStream.exe` with the matching SHA-256 entry.
 
 ## Data
 

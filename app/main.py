@@ -28,7 +28,7 @@ from .bridge import Hub
 from .engine import Engine
 from .gifts import coin_price_for_gift, list_gifts, record_event, refresh_tiktok_catalog
 from .games import get_game
-from .parkour_server import ParkourServer, minecraft_versions
+from .parkour_server import DEFAULT_JAIL_SECONDS, ParkourServer, minecraft_versions, normalize_jail_seconds
 from .models import AppConfig, GameAction, Preset, Rule, TikTokEvent
 from .paths import bundle_root, data_dir, installed_release_tag
 from .tiktok_connector import TikTokConnector
@@ -138,6 +138,7 @@ parkour_server = ParkourServer()
 parkour_reset_task: asyncio.Task | None = None
 parkour_reset_player = ""
 parkour_jail_tasks: dict[str, asyncio.Task] = {}
+parkour_jail_locks: dict[str, asyncio.Lock] = {}
 
 
 async def _run_parkour_action(action: GameAction, *, allow_disabled: bool = False) -> str | None:
@@ -193,24 +194,41 @@ async def _run_parkour_action(action: GameAction, *, allow_disabled: bool = Fals
         diagnostics.info("Anti-reset received, but no countdown was running.")
         return "There is no reset countdown to cancel."
     if action.action == "parkour_jail":
-        previous = parkour_jail_tasks.pop(player, None)
-        if previous and not previous.done():
-            previous.cancel()
-        jail_seconds = max(3, min(120, int((action.params or {}).get("seconds", 20) or 20)))
-        async def release_jail() -> None:
-            try:
-                await asyncio.sleep(jail_seconds)
-                released = await asyncio.to_thread(parkour_server.release_jail, player)
-                diagnostics.info("Released %s from the parkour cage.", player)
-                await hub.publish_status({"parkour_result": released})
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                diagnostics.error("Could not release player %s from parkour jail: %s", player, exc, exc_info=exc)
-                await hub.publish_status({"parkour_result": str(exc)})
-            finally:
-                parkour_jail_tasks.pop(player, None)
-        parkour_jail_tasks[player] = asyncio.create_task(release_jail())
+        jail_seconds = normalize_jail_seconds(
+            (action.params or {}).get("seconds", DEFAULT_JAIL_SECONDS))
+        jail_lock = parkour_jail_locks.setdefault(player, asyncio.Lock())
+
+        # Serialize cage creation and release: a follow at the exact expiry must
+        # not race the old RCON release and strand the player outside the cage.
+        async with jail_lock:
+            previous = parkour_jail_tasks.get(player)
+            # Execute the actual game action before reporting success or starting
+            # the release timer. Previously this branch referenced an unassigned
+            # `result`, so no cage was ever created.
+            result = await asyncio.to_thread(
+                parkour_server.execute_action, action.action, player, {"seconds": jail_seconds})
+            if previous and not previous.done():
+                previous.cancel()
+
+            async def release_jail() -> None:
+                try:
+                    await asyncio.sleep(jail_seconds)
+                    async with jail_lock:
+                        if parkour_jail_tasks.get(player) is not asyncio.current_task():
+                            return
+                        released = await asyncio.to_thread(parkour_server.release_jail, player)
+                        diagnostics.info("Released %s from the parkour cage.", player)
+                        await hub.publish_status({"parkour_result": released})
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    diagnostics.error("Could not release player %s from parkour jail: %s", player, exc, exc_info=exc)
+                    await hub.publish_status({"parkour_result": str(exc)})
+                finally:
+                    if parkour_jail_tasks.get(player) is asyncio.current_task():
+                        parkour_jail_tasks.pop(player, None)
+
+            parkour_jail_tasks[player] = asyncio.create_task(release_jail())
         await hub.publish_status({"parkour_result": result, "parkour_jail_seconds": jail_seconds})
         return result
     if action.action.startswith(("parkour_", "dropper_")):
@@ -369,6 +387,29 @@ def _migrate_builtin_parkour_preset() -> bool:
     return True
 
 
+_LEGACY_PARKOUR_JAIL_RULE_NAME = "Follow → jail for 20 s"
+
+
+def _migrate_parkour_jail_duration() -> bool:
+    """Update the untouched v0.26 default rule, without replacing user settings."""
+    preset = preset_store.get_preset("minecraft-parkour")
+    if preset is None:
+        return False
+    rule = next((item for item in preset.rules if item.id == "mp-follow"), None)
+    legacy_default = Rule(
+        id="mp-follow", name=_LEGACY_PARKOUR_JAIL_RULE_NAME,
+        trigger={"type": "follow"}, action={"type": "parkour_jail"},
+        alert_text="🔒 To jail!",
+    )
+    if rule is None or rule.model_dump() != legacy_default.model_dump():
+        return False
+    rule.name = "Follow → jail for 10 s"
+    rule.action.params["seconds"] = DEFAULT_JAIL_SECONDS
+    preset_store.save_preset(preset)
+    diagnostics.info("Migrated the built-in Parkour jail to %s seconds.", DEFAULT_JAIL_SECONDS)
+    return True
+
+
 LEVEL_JUMP_RULE_IDS = {"mp-jump-forward", "mp-jump-back"}
 
 
@@ -479,6 +520,7 @@ async def startup() -> None:
             preset_store.save_preset(Preset(id=game["preset_id"], name=game["title"],
                                             description=game["description"], rules=game["rules"]))
     _migrate_builtin_parkour_preset()
+    _migrate_parkour_jail_duration()
     _add_missing_wow_rules()
     _add_level_jump_rules()
     _retire_removed_actions()
@@ -1080,7 +1122,7 @@ async def actions() -> list[dict]:
         "parkour_level_jump_forward": "Parkour: +10 levels",
         "parkour_level_jump_back": "Parkour: -10 levels",
         "parkour_checkpoint": "Parkour: back to checkpoint",
-        "parkour_jail": "Parkour: jail for 20 s",
+        "parkour_jail": "Parkour: jail for 10 s",
         "parkour_reset": "Parkour: reset in 60 s",
         "parkour_antireset": "Parkour: cancel reset",
         "parkour_slow": "Parkour: slowness · 7 s",

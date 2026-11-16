@@ -25,6 +25,13 @@ def test_only_supported_minecraft_modes_are_exposed():
     assert Preset(id=dropper["preset_id"], name=dropper["title"], rules=dropper["rules"]).rules
 
 
+def test_parkour_preset_jail_is_ten_seconds():
+    jail = next(rule for rule in get_game("minecraft-parkour")["rules"]
+                if rule["action"]["type"] == "parkour_jail")
+    assert "10 s" in jail["name"]
+    assert jail["action"]["params"] == {"seconds": 10}
+
+
 def test_level_jump_rules_ship_with_the_parkour_preset():
     rules = {rule["id"]: rule for rule in get_game("minecraft-parkour")["rules"]}
     up, down = rules["mp-jump-forward"], rules["mp-jump-back"]

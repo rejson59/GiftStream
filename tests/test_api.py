@@ -1,4 +1,6 @@
+import asyncio
 from pathlib import Path
+import threading
 import re
 
 from fastapi.testclient import TestClient
@@ -27,6 +29,37 @@ def test_builtin_parkour_preset_migrates_only_when_untouched(monkeypatch):
     saved.clear()
     old.rules[0].name = "My custom push"
     assert main._migrate_builtin_parkour_preset() is False
+    assert saved == []
+
+
+def test_parkour_jail_migration_updates_only_the_untouched_old_default(monkeypatch):
+    game = main.get_game("minecraft-parkour")
+
+    def old_default():
+        preset = Preset(id=game["preset_id"], name=game["title"],
+                       description=game["description"], rules=game["rules"])
+        rule = next(item for item in preset.rules if item.id == "mp-follow")
+        rule.name = "Follow → jail for 20 s"
+        rule.action.params = {}
+        return preset
+
+    preset = old_default()
+    saved = []
+    monkeypatch.setattr(main.preset_store, "get_preset", lambda _id: preset)
+    monkeypatch.setattr(main.preset_store, "save_preset", lambda value: saved.append(value) or value)
+    assert main._migrate_parkour_jail_duration() is True
+    migrated = next(item for item in saved[0].rules if item.id == "mp-follow")
+    assert migrated.name == "Follow → jail for 10 s"
+    assert migrated.action.params == {"seconds": 10}
+
+    custom = old_default()
+    custom_rule = next(item for item in custom.rules if item.id == "mp-follow")
+    custom_rule.action.params = {"seconds": 20}
+    saved.clear()
+    monkeypatch.setattr(main.preset_store, "get_preset", lambda _id: custom)
+    assert main._migrate_parkour_jail_duration() is False
+    assert custom_rule.name == "Follow → jail for 20 s"
+    assert custom_rule.action.params == {"seconds": 20}
     assert saved == []
 
 
@@ -148,6 +181,104 @@ def test_non_parkour_presets_are_not_listed_or_activated():
     client = TestClient(main.app)
     assert client.post("/api/presets").status_code == 405
     assert client.post("/api/presets/default/activate").status_code == 404
+
+
+def test_parkour_jail_action_endpoint_runs_and_schedules_a_10_second_release(monkeypatch):
+    calls = []
+    statuses = []
+    monkeypatch.setattr(main, "parkour_jail_tasks", {})
+    monkeypatch.setattr(main, "parkour_jail_locks", {})
+    monkeypatch.setattr(main.parkour_server, "settings", lambda: {
+        "game_mode": "parkour", "server_dir": "local-server", "player": "Streamer", "enabled": False})
+    monkeypatch.setattr(main.parkour_server, "status", lambda: {
+        "ready": True, "players": ["Streamer"]})
+
+    def execute_action(action, player, params):
+        calls.append((action, player, params))
+        return "Player is locked in a flying glass cage for 10 seconds."
+
+    async def publish_status(status):
+        statuses.append(status)
+
+    monkeypatch.setattr(main.parkour_server, "execute_action", execute_action)
+    monkeypatch.setattr(main.hub, "publish_status", publish_status)
+
+    async def exercise_endpoint():
+        result = await main.parkour_test_action(main.ParkourActionRequest(action="parkour_jail"))
+        assert result == {
+            "ok": True,
+            "message": "Player is locked in a flying glass cage for 10 seconds.",
+        }
+        task = main.parkour_jail_tasks["Streamer"]
+        await asyncio.sleep(0)  # Let the release timer start before cancelling the test task.
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(exercise_endpoint())
+    assert calls == [("parkour_jail", "Streamer", {"seconds": 10})]
+    assert statuses == [{
+        "parkour_result": "Player is locked in a flying glass cage for 10 seconds.",
+        "parkour_jail_seconds": 10,
+    }]
+
+
+def test_new_jail_waits_for_an_in_progress_release_before_re_caging(monkeypatch):
+    calls = []
+    release_started = threading.Event()
+    allow_release_to_finish = threading.Event()
+    real_sleep = asyncio.sleep
+    timer_sleeps = 0
+
+    monkeypatch.setattr(main, "parkour_jail_tasks", {})
+    monkeypatch.setattr(main, "parkour_jail_locks", {})
+    monkeypatch.setattr(main.parkour_server, "settings", lambda: {"player": "Streamer", "enabled": True})
+
+    def execute_action(action, player, params):
+        calls.append((action, player, params))
+        return "Player is locked in a flying glass cage for 3 seconds."
+
+    def release_jail(player):
+        calls.append(("release", player))
+        release_started.set()
+        if not allow_release_to_finish.wait(2):
+            raise TimeoutError("Test did not allow the old release to finish.")
+        return "Released from jail."
+
+    async def controlled_timer_sleep(_seconds):
+        nonlocal timer_sleeps
+        timer_sleeps += 1
+        if timer_sleeps == 1:
+            return  # Put the first timer directly into its release path.
+        await real_sleep(30)
+
+    async def publish_status(_status):
+        return None
+
+    monkeypatch.setattr(main.parkour_server, "execute_action", execute_action)
+    monkeypatch.setattr(main.parkour_server, "release_jail", release_jail)
+    monkeypatch.setattr(main.hub, "publish_status", publish_status)
+    monkeypatch.setattr(main.asyncio, "sleep", controlled_timer_sleep)
+
+    async def exercise():
+        action = main.GameAction(action="parkour_jail", params={"seconds": 3})
+        await main._run_parkour_action(action)
+        previous = main.parkour_jail_tasks["Streamer"]
+        assert await asyncio.to_thread(release_started.wait, 2)
+
+        next_action = asyncio.create_task(main._run_parkour_action(action))
+        await real_sleep(0.02)
+        # The cage cannot be refreshed while the previous RCON release is running.
+        assert len([call for call in calls if call[0] == "parkour_jail"]) == 1
+        allow_release_to_finish.set()
+        await next_action
+        await asyncio.gather(previous, return_exceptions=True)
+        assert [call[0] for call in calls] == ["parkour_jail", "release", "parkour_jail"]
+
+        current = main.parkour_jail_tasks["Streamer"]
+        current.cancel()
+        await asyncio.gather(current, return_exceptions=True)
+
+    asyncio.run(exercise())
 
 
 def test_parkour_test_endpoint_accepts_new_actions_but_not_arbitrary_commands(monkeypatch):

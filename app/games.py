@@ -52,7 +52,8 @@ GAMES = [
             _rule("mp-back", "Ice Cream · 30–999 coins → previous level", {"type": "gift", "gift_name": "Ice Cream", "min_coins": 30, "max_coins": 999}, {"type": "parkour_level_back"}, "↩ Send them back!"),
             _rule("mp-jump-forward", "Dragon · 1000+ coins → +10 levels", {"type": "gift", "gift_name": "Dragon", "min_coins": 1000}, {"type": "parkour_level_jump_forward", "params": {"levels": 10}}, "🚀 Ten levels at once!"),
             _rule("mp-jump-back", "TikTok Universe · 1000+ coins → -10 levels", {"type": "gift", "gift_name": "TikTok Universe", "min_coins": 1000}, {"type": "parkour_level_jump_back", "params": {"levels": 10}}, "🎆 Back ten levels!"),
-            _rule("mp-follow", "Follow → jail for 20 s", {"type": "follow"}, {"type": "parkour_jail"}, "🔒 To jail!"),
+            _rule("mp-follow", "Follow → jail for 10 s", {"type": "follow"},
+                  {"type": "parkour_jail", "params": {"seconds": 10}}, "🔒 To jail!"),
             _rule("mp-reset", "Castle · 1000+ coins → reset in 60 s", {"type": "gift", "gift_name": "Castle", "min_coins": 1000}, {"type": "parkour_reset"}, "🏰 Reset in 60 seconds!", True),
             _rule("mp-antireset", "Lion · 1000+ coins → cancel reset", {"type": "gift", "gift_name": "Lion", "min_coins": 1000}, {"type": "parkour_antireset"}, "🦁 Reset saved!", True),
             # Wow events: blackout on 1000 taps, follow, share, comment

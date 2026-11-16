@@ -27,6 +27,22 @@ from .paths import bundle_root, data_dir
 from . import diagnostics
 
 PLAYER_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
+DEFAULT_JAIL_SECONDS = 10
+MIN_JAIL_SECONDS = 3
+MAX_JAIL_SECONDS = 120
+
+
+def normalize_jail_seconds(value: Any = DEFAULT_JAIL_SECONDS) -> int:
+    """Return a bounded, whole-second duration for the temporary jail."""
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        raise ValueError("Jail duration must be a whole number of seconds.")
+    try:
+        seconds = int(value or DEFAULT_JAIL_SECONDS)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Jail duration must be a whole number of seconds.") from exc
+    return max(MIN_JAIL_SECONDS, min(MAX_JAIL_SECONDS, seconds))
+
+
 MAP_FILENAME = "100-levels-5229-v1.7.4.zip"
 MAP_VERSION = "26.2"  # Version the bundled world was prepared and tested against.
 # Stable feet positions inspected from the bundled 100 Levels v1.7.4 world.
@@ -1812,7 +1828,7 @@ class ParkourServer:
             self.keep_daylight()
             return message
         if action == "parkour_jail":
-            seconds = int(params.get("seconds", 20) or 20)
+            seconds = normalize_jail_seconds(params.get("seconds", DEFAULT_JAIL_SECONDS))
             return self.jail_player(player, seconds=seconds)
         if action in {"parkour_reset", "parkour_antireset"}:
             raise RuntimeError("The reset countdown is coordinated by GiftStream.")
@@ -1902,7 +1918,7 @@ class ParkourServer:
     JAIL_MATERIAL = "minecraft:iron_bars"   # see-through cage walls
     JAIL_FLOOR = "minecraft:glass"          # floor and roof
 
-    def jail_player(self, player: str, seconds: int = 20) -> str:
+    def jail_player(self, player: str, seconds: int = DEFAULT_JAIL_SECONDS) -> str:
         """Build a small floating cage around the player, for a few seconds.
 
         The cage hovers above the ground the player stands on, so it is clear of
@@ -1914,6 +1930,21 @@ class ParkourServer:
         """
         if not PLAYER_RE.fullmatch(player or ""):
             raise ValueError("Invalid player name.")
+        seconds = normalize_jail_seconds(seconds)
+        if player in self._cages:
+            # A repeated follow should extend the existing cage, not build a
+            # second cage above the first one or overwrite the original return point.
+            commands = [
+                f"effect give {player} minecraft:resistance {min(seconds + 2, 120)} 4 true",
+                f"effect give {player} minecraft:slow_falling {min(seconds + 2, 120)} 0 true",
+                f"title {player} actionbar "
+                + json.dumps({"text": f"JAILED · {seconds} s", "color": "red", "bold": True},
+                              separators=(",", ":")),
+            ]
+            for command in commands:
+                self._rcon_checked(command, log_success=False)
+            diagnostics.info("Refreshed %s's parkour cage for %s s.", player, seconds)
+            return f"Player is locked in a flying glass cage for {seconds} seconds."
         position = self.player_position(player)
         if not position:
             raise RuntimeError("The player is not on the server, so there is nothing to cage.")

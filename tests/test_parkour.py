@@ -8,8 +8,8 @@ import pytest
 
 from app.parkour_server import (MAP_FILENAME, MAP_VERSION, ParkourServer, _extract_map,
                                 _LEVEL_AREA_ORDER, _level_score_at, level_checkpoint,
-                                map_level_areas,
-                                map_level_spawn_points)
+                                map_level_areas, map_level_spawn_points,
+                                normalize_jail_seconds)
 
 
 def test_minecraft_version_options_offer_latest_stable_and_exclude_snapshots(monkeypatch):
@@ -408,7 +408,7 @@ def test_parkour_jail_builds_a_floating_cage_without_touching_the_map(monkeypatc
 
     monkeypatch.setattr(server, "player_position", lambda _player: (-4.5, 90.0, 2.5))
     assert server.execute_action("parkour_jail") == \
-        "Player is locked in a flying glass cage for 20 seconds."
+        "Player is locked in a flying glass cage for 10 seconds."
     # Floor 2 blocks above the ground the player stands on, roof 3 blocks higher.
     assert commands[0] == "fill -6 92 1 -4 92 3 minecraft:glass keep"
     assert commands[1] == "fill -6 95 1 -4 95 3 minecraft:glass keep"
@@ -422,8 +422,42 @@ def test_parkour_jail_builds_a_floating_cage_without_touching_the_map(monkeypatc
         "fill -4 93 1 -4 94 3 minecraft:iron_bars keep",
     ]
     assert commands[6] == "tp Streamer -4.5 92.1 2.5"
+    assert commands[7] == "effect give Streamer minecraft:resistance 12 4 true"
+    assert commands[8] == "effect give Streamer minecraft:slow_falling 12 0 true"
+    assert json.loads(commands[9].split("actionbar ", 1)[1])["text"] == "JAILED · 10 s"
     assert not any(command.startswith("clone") for command in commands)
     assert not any("hollow" in command or "polished_deepslate" in command for command in commands)
+
+
+def test_jail_duration_is_defaulted_and_bounded():
+    assert normalize_jail_seconds() == 10
+    assert normalize_jail_seconds(0) == 10
+    assert normalize_jail_seconds(1) == 3
+    assert normalize_jail_seconds(12) == 12
+    assert normalize_jail_seconds(999) == 120
+    with pytest.raises(ValueError, match="whole number"):
+        normalize_jail_seconds("ten")
+    with pytest.raises(ValueError, match="whole number"):
+        normalize_jail_seconds(10.5)
+
+
+def test_repeated_jail_refreshes_the_existing_cage_without_overwriting_its_return_point(monkeypatch):
+    server = ParkourServer()
+    commands = []
+    monkeypatch.setattr(server, "settings", lambda: {"player": "Streamer"})
+    monkeypatch.setattr(server, "_rcon", lambda command, **_kwargs: commands.append(command) or "ok")
+    monkeypatch.setattr(server, "player_position", lambda _player: (-4.5, 90.0, 2.5))
+
+    server.execute_action("parkour_jail")
+    original_cage = server._cages["Streamer"].copy()
+    commands.clear()
+    monkeypatch.setattr(server, "player_position", lambda _player: pytest.fail("the player should stay in the current cage"))
+
+    assert server.execute_action("parkour_jail", "Streamer", {"seconds": 7}) == \
+        "Player is locked in a flying glass cage for 7 seconds."
+    assert server._cages["Streamer"] == original_cage
+    assert len(commands) == 3
+    assert not any(command.startswith("fill ") for command in commands)
 
 
 def test_jail_release_clears_only_the_cage_material_and_drops_the_player_back(monkeypatch):
