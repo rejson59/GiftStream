@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">GiftStream</title>
+  <rect x="12" y="12" width="232" height="232" rx="61" fill="#111315" stroke="#303b1d" stroke-width="4"/>
+  <path d="M52 123h152v62a22 22 0 0 1-22 22H74a22 22 0 0 1-22-22z" fill="#c1f32a"/>
+  <path d="M52 135h152v19H52z" fill="#111315"/>
+  <path d="M116 81h24v126h-24z" fill="#111315"/>
+  <rect x="42" y="92" width="173" height="36" rx="13" fill="#d8ff78"/>
+  <path fill="#c9fb58" fill-rule="evenodd" d="M100 48a27 27 0 1 0 0 54 27 27 0 1 0 0-54zm0 14a13 13 0 1 1 0 26 13 13 0 1 1 0-26zm56-14a27 27 0 1 0 0 54 27 27 0 1 0 0-54zm0 14a13 13 0 1 1 0 26 13 13 0 1 1 0-26z"/>
+  <circle cx="128" cy="86" r="17" fill="#b4e93a"/>
+</svg>

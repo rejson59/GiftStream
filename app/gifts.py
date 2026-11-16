@@ -1,13 +1,14 @@
-"""Lokalna biblioteka giftów: przykładowe wpisy + metadane z LIVE.
+"""Local gift library: sample entries + metadata from LIVE.
 
-Oryginalne grafiki nie są kopiowane ani hostowane przez GiftStream. Gdy
-TikTokLive zwróci adres CDN grafiki prezentu, zapisujemy adres źródłowy,
-aby można go użyć na nakładce OBS.
+Original artwork is never copied or hosted by GiftStream. When TikTokLive
+returns a gift artwork CDN URL, the source address is stored so the OBS
+overlay can use it.
 """
 from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -16,19 +17,19 @@ from .models import GIFT_CATALOG, TikTokEvent
 from .paths import data_dir
 
 CACHE_PATH = data_dir() / "gift_catalog.json"
-LABEL_PL = {"Rose":"Róża", "Rosa":"Róża", "Dragon":"Smok", "Lion":"Lew",
+LABEL_PL = {"Rose":"Rose", "Rosa":"Rose", "Dragon":"Smok", "Lion":"Lew",
             "Doughnut":"Donut", "Donut":"Donut", "Ice Cream":"Lody",
-            "Finger Heart":"Serduszko z palców", "Sunglasses":"Okulary",
-            "Money Gun":"Pistolet na pieniądze", "TikTok Universe":"Wszechświat TikToka"}
+            "Finger Heart":"Finger Heart", "Sunglasses":"Okulary",
+            "Money Gun":"Money Gun", "TikTok Universe":"TikTok Universe"}
 
-# First entries are familiar, frequently used gifts. The rest of the 100-card
-# showcase is filled from TikTok's current public catalog, favoring accessible gifts.
+# First entries are familiar, frequently used gifts. The local cache can retain a
+# broad current catalog; missing CDN art or coin fields must not hide a real gift.
 POPULAR_GIFT_NAMES = (
-    "rose", "tiktok", "finger heart", "donut", "ice cream", "gg", "perfume",
+    "rose", "tiktok", "finger heart", "donut", "doughnut", "ice cream", "gg", "perfume",
     "heart me", "love you", "cap", "sunglasses", "paper crane", "hand hearts",
     "galaxy", "lion", "universe", "money gun", "swan", "fireworks", "dragon",
 )
-POPULAR_GIFT_LIMIT = 100
+POPULAR_GIFT_LIMIT = 1000
 
 
 def label_pl(name: str) -> str:
@@ -40,7 +41,20 @@ def _load_cache() -> dict[str, dict[str, Any]]:
         return {}
     try:
         data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-        return {str(x.get("id")): x for x in data if x.get("id") is not None}
+        cache = {str(x.get("id")): x for x in data if isinstance(x, dict) and x.get("id") is not None}
+        # Older releases filled viewer Coins from creator diamonds. Keep only explicit
+        # coin prices; invalidate stale estimated values as unknown, never as 0 Coins.
+        for gift in cache.values():
+            try:
+                coins = int(gift.get("coins", 0) or 0)
+            except (TypeError, ValueError):
+                coins = 0
+            if gift.get("coins_estimated") is not False or coins <= 0:
+                gift["coins"] = 0
+                gift["coins_estimated"] = True
+            else:
+                gift["coins"] = coins
+        return cache
     except (OSError, ValueError, TypeError):
         return {}
 
@@ -81,6 +95,15 @@ def record_event(event: TikTokEvent) -> None:
                  "name": event.gift_name,
                  "label_pl": label_pl(event.gift_name),
                  "diamonds": event.diamonds or old.get("diamonds", 0),
+                 "coins": (event.gift_coins if event.gift_coins > 0 and not event.gift_coins_estimated
+                           else old.get("coins", 0) if old.get("coins_estimated") is False else 0),
+                 "coins_estimated": (False if event.gift_coins > 0 and not event.gift_coins_estimated
+                                     else old.get("coins_estimated") is not False),
+                 "coin_source": ((event.gift_coins_source or "live-event")
+                                 if event.gift_coins > 0 and not event.gift_coins_estimated
+                                 else old.get("coin_source", "")),
+                 "price_updated_at": (time.time() if event.gift_coins > 0 and not event.gift_coins_estimated
+                                      else old.get("price_updated_at")),
                  "image_url": _safe_tiktok_image(event.gift_image_url) or old.get("image_url"),
                  "source": "tiktok-live" if event.source in {"tiktok", "managed"} else event.source,
                  "streakable": old.get("streakable", False)}
@@ -111,6 +134,13 @@ def record_metadata(gift: Any, source: str = "tiktok-live", save: bool = True) -
         diamonds = int(field(gift, "diamond_count", "diamondCount", "diamond_count_value", default=0) or 0)
     except (TypeError, ValueError):
         diamonds = 0
+    explicit_coins = field(gift, "coin_count", "coinCount", "coins", "price_in_coins", "priceInCoins")
+    try:
+        coins = max(0, int(explicit_coins)) if explicit_coins is not None else 0
+    except (TypeError, ValueError):
+        coins = 0
+        explicit_coins = None
+    coins_estimated = explicit_coins is None or coins <= 0
     try:
         gift_type = field(gift, "type", default=0)
         streakable = bool(field(gift, "streakable", default=gift_type == 1))
@@ -119,8 +149,21 @@ def record_metadata(gift: Any, source: str = "tiktok-live", save: bool = True) -
     key = str(gift_id) if gift_id is not None else f"name:{str(name).casefold()}"
     with _cache_lock:
         previous = _seen.get(key, {})
+        # Catalog refreshes often omit coin_count. Never erase an exact price
+        # already observed on a LIVE event when a poorer metadata payload arrives.
+        try:
+            previous_coins = max(0, int(previous.get("coins", 0) or 0))
+        except (TypeError, ValueError):
+            previous_coins = 0
+        has_live_price = previous.get("coins_estimated") is False and previous_coins > 0
+        exact_price = coins > 0 and not coins_estimated
         _seen[key] = {"id": gift_id, "name": str(name), "label_pl": label_pl(str(name)),
-                      "diamonds": diamonds, "image_url": image_url or previous.get("image_url"),
+                      "diamonds": diamonds or previous.get("diamonds", 0),
+                      "coins": coins if exact_price else previous_coins if has_live_price else 0,
+                      "coins_estimated": not (exact_price or has_live_price),
+                      "coin_source": source if exact_price else previous.get("coin_source", ""),
+                      "price_updated_at": time.time() if exact_price else previous.get("price_updated_at"),
+                      "image_url": image_url or previous.get("image_url"),
                       "source": source, "streakable": streakable}
         if save:
             _save()
@@ -130,10 +173,11 @@ def _popular_rank(gift: Any) -> tuple[int, int, str]:
     name = str(gift.get("name", "")).casefold()
     rank = next((i for i, candidate in enumerate(POPULAR_GIFT_NAMES) if candidate in name), len(POPULAR_GIFT_NAMES))
     try:
-        diamonds = int(gift.get("diamonds") or 0)
+        coins = int(gift.get("coins", 0) or 0)
     except (TypeError, ValueError):
-        diamonds = 0
-    return rank, diamonds, name
+        coins = 0
+    # Unknown prices sort after explicitly priced gifts within the same rank.
+    return rank, coins if coins > 0 and gift.get("coins_estimated") is False else 2**31, name
 
 
 def record_catalog(entries: Any) -> int:
@@ -148,8 +192,6 @@ def record_catalog(entries: Any) -> int:
             continue
         image = gift.get("image") or gift.get("icon") or {}
         urls = image.get("url_list", image.get("urlList", [])) if isinstance(image, dict) else []
-        if not any(_safe_tiktok_image(url) for url in urls if isinstance(url, str)):
-            continue
         name = gift.get("name") or gift.get("gift_name")
         if not name:
             continue
@@ -165,10 +207,15 @@ def record_catalog(entries: Any) -> int:
     if not selected:
         return 0
     with _cache_lock:
-        for key in [key for key, value in _seen.items() if value.get("source") == "tiktok-catalog"]:
-            _seen.pop(key, None)
+        selected_keys = set()
         for _rank, gift in selected:
+            gift_id = gift.get("id", gift.get("gift_id"))
+            gift_name = gift.get("name") or gift.get("gift_name")
+            selected_keys.add(str(gift_id) if gift_id is not None else f"name:{str(gift_name).casefold()}")
             record_metadata(gift, source="tiktok-catalog", save=False)
+        for key, value in list(_seen.items()):
+            if value.get("source") == "tiktok-catalog" and key not in selected_keys:
+                _seen.pop(key, None)
         _save()
     return len(selected)
 
@@ -192,12 +239,31 @@ def refresh_tiktok_catalog() -> int:
         return asyncio.run(fetch())
 
 
-def list_gifts(query: str = "") -> list[dict[str, Any]]:
-    """Combine examples with observed gift data; observed IDs win."""
+def coin_price_for_gift(gift_id: int | None, gift_name: str | None) -> tuple[int, bool]:
+    """Return cached viewer coin cost and whether that cost is an estimate.
+
+    Never substitute creator diamonds for viewer coins: price gates can require only
+    values explicitly supplied as coin_count/coinCount/coins by catalog metadata.
+    """
+    entries = list_gifts()
+    match = next((gift for gift in entries if gift_id is not None and str(gift.get("id")) == str(gift_id)), None)
+    if match is None and gift_name:
+        match = next((gift for gift in entries if str(gift.get("name", "")).casefold() == gift_name.casefold()), None)
+    if match is None:
+        return 0, True
+    try:
+        coins = max(0, int(match.get("coins", 0) or 0))
+    except (TypeError, ValueError):
+        return 0, True
+    return coins, bool(match.get("coins_estimated", True))
+
+
+def list_gifts(query: str = "", sort: str = "price_asc") -> list[dict[str, Any]]:
+    """Combine gift sources and sort by TikTok gift prominence or viewer coin cost."""
     merged: dict[str, dict[str, Any]] = {}
     with _cache_lock:
         seen = {key: dict(gift) for key, gift in _seen.items()}
-    has_real_catalog = sum(1 for gift in seen.values() if gift.get("source") == "tiktok-catalog" and gift.get("image_url")) >= 80
+    has_real_catalog = sum(1 for gift in seen.values() if gift.get("source") == "tiktok-catalog") >= 80
     if not has_real_catalog:
         for gift in GIFT_CATALOG:
             merged[f"name:{gift['name'].casefold()}"] = dict(gift)
@@ -209,8 +275,21 @@ def list_gifts(query: str = "") -> list[dict[str, Any]]:
         if name_key in merged:
             merged.pop(name_key, None)
     entries = list(merged.values())
+    for gift in entries:
+        # A missing explicit viewer coin price is unknown, not an estimate from diamonds.
+        try:
+            coins = max(0, int(gift.get("coins", 0) or 0))
+        except (TypeError, ValueError):
+            coins = 0
+        verified = gift.get("coins_estimated") is False and coins > 0
+        gift["coins_estimated"] = not verified
+        gift["coins"] = coins if verified else 0
     if query.strip():
         q = query.strip().casefold()
         entries = [g for g in entries if q in str(g.get("name", "")).casefold()
                    or q in str(g.get("label_pl", "")).casefold()]
-    return sorted(entries, key=lambda g: (int(g.get("diamonds") or 0), str(g.get("name", "")).casefold()))
+    if sort == "popular":
+        return sorted(entries, key=_popular_rank)
+    if sort == "price_desc":
+        return sorted(entries, key=lambda g: (g["coins"] <= 0, -g["coins"], str(g.get("name", "")).casefold()))
+    return sorted(entries, key=lambda g: (g["coins"] <= 0, g["coins"], str(g.get("name", "")).casefold()))

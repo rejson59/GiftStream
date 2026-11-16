@@ -1,68 +1,58 @@
 # GiftStream
 
-**Prezenty z TikTok LIVE sterują grą.** GiftStream przypisuje prezenty, polubienia, obserwacje i komentarze do akcji w grze. Skonfiguruj preset, przetestuj symulatorem, a potem połącz grę przez WebSocket, HTTP, UDP lub adapter Minecraft.
+**TikTok LIVE drives Minecraft Parkour and Dropper.** GiftStream receives LIVE events, matches them against a ready-made preset and runs safe actions on your local Minecraft server.
 
-## Co działa w MVP
+## What GiftStream includes
 
-- Polski panel twórcy z aktywnością na żywo, statystykami i rankingiem wspierających.
-- Presety i edytor reguł: prezent / próg polubień / obserwacja / słowo w komentarzu → akcja gry.
-- Cooldowny, obsługa serii prezentów i oznaczenia akcji priorytetowych.
-- Symulator zdarzeń oraz nieoficjalny konektor TikTokLive i adapter zewnętrznego WebSocket API.
-- Gra demo „Zombie: przetrwanie” i nakładka OBS.
-- Integracja Minecraft **Paper / Spigot / Bukkit przez ServerTap**. Obsługuje ograniczony zestaw komend z allow-listy; konfiguracja w panelu Integracje.
-- Katalog pomysłów na interaktywne tryby: Minecraft, 7 Days to Die, GTA V offline, Raft, Valheim, Roblox.
-- Biblioteka do 100 popularnych giftów: katalog TikToka i oryginalne grafiki z jego CDN pobierane są automatycznie bez logowania i bez połączenia transmisji. GiftStream zapisuje metadane i adresy lokalnie, nie kopiuje ani nie hostuje grafik.
-- Lokalne pliki JSON; konto ani baza danych nie są wymagane do testów.
+- Two ready-made local game modes: **Minecraft Parkour 100 Levels** and **Minecraft Dropper 100 Levels** with a locally generated 100-shaft map, varied obstacles and automatic progress after a water landing. Dropper runs on vanilla and never downloads maps or plugins from untrusted sources.
+- **Two interface languages (0.26.0).** The language selector in the top bar switches the whole panel between English and Polish: menus, buttons, help texts, overlays, toasts and server error messages. Both languages live in `web/i18n.pl.json` and `web/i18n.js` is generated from it by `python tools/build_i18n.py`; `tests/test_i18n.py` fails when a visible string has no Polish text, when a Polish entry is still English, or when Polish text leaks into the English sources — so neither language can end up half-translated.
+- **Only two versions on disk (0.26.0).** Updates used to keep every downloaded build; now GiftStream keeps the running version plus one older one and deletes the rest right after an update and at every start.
+- Parkour rules are fully editable: punch, next/previous level, a 10-level jump up or down, reset and anti-reset plus five viewer effects — slowness, darkness, high jump with a safe landing, a short shield and a cleanse of negative effects. Every one of them is selectable in the rule editor, and the Minecraft panel can test them locally without a LIVE event. Default coin prices: punch 1–29 coins, level change 30–999, reset and anti-reset from 1000; thresholds rely only on an explicit TikTok price. There is **no speed boost** — it disturbed the run more than it helped — and **the map always looks like day**.
+- **Fresh map on every start (0.24.0).** Each launch of the local server replaces the world with a clean copy of the bundled 100 Levels map, so a change made by accident — a broken command block, a hole in the course, leftover jail blocks — can never survive a restart. The new map is unpacked next to the world first and swapped in only when it is complete, so a failed reset leaves the existing world untouched; the old world is deleted right after the swap so nothing is doubled on disk. The status line shows when the map was last reset, and **Reset map** in the Minecraft panel does the same on demand (with the server stopped).
+- **Level detection and checkpoints (0.23.0).** The level comes from the player's real position, resolved with the map's own `setlevel` order (overlapping boxes behave exactly like the datapack), so a stale scoreboard value can no longer send a player on level 1 to stage 100 — and standing in the lobby reports "not on a stage" instead of teleporting somewhere random. The 100 start points live in `app/level_checkpoints_data.py`, so they are always inside the packaged app (`tools/build_level_checkpoints.py` rebuilds them from the map).
+- **Punch always hits (0.23.0).** The arrow starts one block in front of the player's chest and flies back into their hitbox, so it visibly flies *at* the runner and Punch II knockback (which needs a real hit) always triggers. GiftStream checks the block first and picks a free direction, so on a 1-block corridor the arrow never starts inside a wall; a fully sealed player gets a clear error instead of a silent miss.
+- **The jail is a 10-second floating cage that cannot damage the map.** The player is lifted into a 3×3 iron-bar cage with a glass floor and roof, two blocks above the ground, then returned to their original position. Every block is placed with `keep` (air only) and released with `replace` (cage material only), so no course block can ever be overwritten or destroyed.
+- **English by default, Polish on demand (0.26.0)** — the dashboard, the overlays and every message the game shows exist in both languages; the switch is in the top bar.
+- **Daylight lock matches the server version (0.23.0).** Java 1.21.11 renamed the game rules (`doDaylightCycle` → `advance_time`, `doWeatherCycle` → `advance_weather`), and 26.x rejects the old names — so the old daylight commands were silently failing. GiftStream now sends the correct names for the running server and retries with the other scheme if a build rejects them.
+- **“Wow” actions:** blackout for 1000 taps — `darkness` + `blindness` for 15 s, so you can barely see, with the time of day untouched; follow gives a heart ovation; sharing the stream calls lightning on the player; a `disco` comment starts a particle disco. All of them are ordinary actions in the rule editor (`parkour_blackout`, `parkour_lightning`, `parkour_disco`, `parkour_heart` and the `dropper_*` equivalents), with default rules in both presets and cooldowns so the chat cannot turn the map into chaos.
+- Like thresholds counted **across all viewers at once**: the “Count likes from all viewers” option makes 1000 taps from the whole chat fire the effect, with the overflow carried to the next threshold. By default thresholds are still counted per viewer.
+- **Rule order is editable** — drag a card by its `⠿` handle or use the ↑/↓ buttons; the order is saved in the preset and used by the panel, the OBS overlay and action execution.
+- Dropper has its own preset: Punch II arrow, next/previous level, back to the start, slowness, darkness, high jump, shield and cleanse. Action testing works from the Minecraft panel without TikTok LIVE. Vanilla is a deliberate choice: nothing requires Bukkit/Paper plugins, which would mean replacing the server and a separate security review.
+- One-click setup of the local vanilla server with a choice of the latest stable or one of the recent Minecraft releases. GiftStream downloads and verifies the server from Mojang's official manifest, isolates each version's world and shows the `localhost:25565` address you can copy. The map works as a datapack without unverified plugins; setup repairs two incompatible item-modifier resources and adds a level HUD next to the existing timer. The original map was prepared for 26.2; the fix removes the reported resource-loading error on 26.3, but is not a full certification of the map for every version. GiftStream finds Java in your launchers or installs a matching per-user runtime automatically; internet access for the first setup and accepting the Minecraft EULA yourself are required. Details: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+- Optional relay of LIVE comment text into the Minecraft chat. The text is encoded as `tellraw` — it is never executed as a command.
+- **Unofficial** TikTokLive connector. GiftStream never generates fake events or counters; it starts disconnected and waits for a manual channel connection. Changing the channel first stops the previous connection and resets the statistics, then starts collecting events from the new LIVE. The connection depends on the current availability of the library and TikTok; GiftStream retries dropped connections with a clear status and growing backoff, recognises an offline channel and rechecks it every 2–5 minutes, and pauses pointless attempts when the signing service is rate limited.
+- Experimental Browser relay for visible LIVE notifications. A Chrome/Edge extension forwards them only to the local GiftStream, without a paid server and without reading private WebSocket frames; availability depends on TikTok's current DOM. The action history now distinguishes pending, executed, failed and sent-to-bridge.
+- Diagnostics cover connections, incoming events, rules and Parkour actions, Java/server/map installation, RCON, API errors and UI errors; the server's JVM log is included in the Minecraft panel. Logs can be copied from the main panel or the Minecraft tab; diagnostics never log LIVE comment content.
+- The library can keep up to 1000 gifts from the current TikTok catalog; search gifts by name both in the library and directly in the rule editor. Artwork is served through a safe proxy to the TikTok CDN with catalog refresh on a loading error; an entry without available artwork stays visible. Viewer coins and creator diamonds are kept apart, and missing prices are never guessed.
+- **Sound trimming (0.20.0):** in the Sound studio you pick the exact alert fragment on the waveform — with handles, start/end fields or one click (“First 8 s”, “Loudest fragment”, “Middle of the track”). Plus fade in/out in milliseconds, preview of the selection only and a library of uploaded files with their duration. WAV is cut by the server without ffmpeg (PCM 8/16/24/32 bit, mono and stereo), while MP3/M4A/OGG/FLAC are decoded by the browser and saved as WAV. A linked sound (e.g. MyInstants) can be downloaded safely into a local file first — public HTTPS only, redirect checks and a 10 MB limit. Details: [`docs/SOUNDS.md`](docs/SOUNDS.md).
+- A separate LIVE sound studio with a MyInstants search, preview and one-click selection; the recommendation list opens results for a manual preview and choice; previews and alerts are limited to 12 seconds and GiftStream never downloads full YouTube tracks. You can also upload your own MP3, WAV, OGG, M4A, AAC or FLAC (up to 10 MB), set a public HTTPS URL, volume and TTS. A Studio sound can be assigned to a specific rule. OBS overlays have seven layouts, including the transparent LIVE Arena with rule cards, live counters, the top viewer and recent gifts. The arena can be configured separately for 16:9 and 9:16 canvases: drag the modules, resize them and share the saved layout in the OBS URL. The editor also exposes module visibility, color theme, accent color, scale, card opacity, density and title; HUD statistics come only from real events.
+- Sound alerts, speech synthesis, OBS widgets and an estimated reward value in PLN. The estimate is not an official TikTok rate and not a promise of a payout.
 
-## Aplikacja Windows i automatyczne aktualizacje
+## Windows app and updates
 
-**GiftStream dla Windows to jeden samodzielny plik EXE.** Pobierz [GiftStream.exe](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream.exe) i uruchom go — osobny instalator ani launcher nie są potrzebne. Przy pierwszym uruchomieniu aplikacja zapisze swoją kopię w `%LOCALAPPDATA%\GiftStream`, utworzy skrót GiftStream w menu Start i uruchomi natywne okno z osadzonym WebView2. Python nie musi być zainstalowany; WebView2 musi być dostępny w Windows.
+**GiftStream for Windows is a single standalone EXE.** Download [GiftStream.exe](https://github.com/rejson59/GiftStream/releases/latest/download/GiftStream.exe) and run it — no separate installer or launcher is needed. The app opens its native WebView2 window without waiting for a network check or a shortcut; the GiftStream Start-menu shortcut is prepared in the background. Starting it again while the app runs does not open a second window. Python does not have to be installed; WebView2 must be available on Windows.
 
-Aplikacja sprawdza aktualizacje podczas uruchamiania oraz co 30 minut i ma przycisk „Sprawdź aktualizacje”. Pobiera zweryfikowaną sumą SHA-256 kopię tego samego pliku GiftStream.exe. Jeśli aktualizacja zostanie znaleziona przy uruchamianiu, nowa wersja otworzy się od razu; aktualizacja pobrana podczas pracy nie przerywa transmisji, a skrót Start wskazuje już nową wersję. Dane aplikacji są przechowywane w `%LOCALAPPDATA%\GiftStream`. Nowa instalacja zaczyna z czystymi ustawieniami i nie importuje danych poprzednich wersji.
+The app checks for updates at startup and every 30 minutes. A verified new version is downloaded and launched automatically; during the restart GiftStream may briefly stop receiving events, and you may need to reconnect to LIVE afterwards. Data is stored in `%LOCALAPPDATA%\GiftStream`. A fresh install is clean and does not import data from previous installations.
 
-Nowe wydania są budowane przez GitHub Actions z taga `vX.Y.Z` i zawierają wyłącznie `GiftStream.exe` oraz plik sumy kontrolnej. Plik nie jest podpisany Authenticode, więc Windows SmartScreen może pokazać ostrzeżenie.
+New releases are built by GitHub Actions from a `vX.Y.Z` tag; the artifact is GiftStream.exe plus its checksum. The file is not Authenticode-signed, so Windows SmartScreen may show a warning.
 
-## Uruchomienie deweloperskie
+## Development run
 
-Wymagany Python 3.10+.
+Python 3.10+ is required.
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Otwórz `http://localhost:8000`. Domyślnie działa symulator. „Szybki test” wysyła przykładowy prezent; grę demo otworzysz w panelu. Adres nakładki OBS: `http://localhost:8000/overlay?template=grid` (dostępne też `list` i `minimal`).
+Open `http://localhost:8000`. GiftStream starts disconnected; connect a real TikTok LIVE channel to start counting statistics. OBS overlays are available at `/overlay?template=grid`, `list`, `minimal`, `streamer`, `ticker`, `spotlight` or `arena`; LIVE Arena has a transparent background and a responsive landscape/portrait layout.
 
-## Minecraft
+## Security and limitations
 
-Zainstaluj ServerTap na Paper/Spigot/Bukkit, włącz klucz API w konfiguracji wtyczki, a następnie w GiftStream przejdź do **Integracje → Minecraft przez ServerTap**. Wpisz bazowy adres, klucz oraz nick gracza; przetestuj i włącz integrację. Szczegółowa instrukcja: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
-
-Komendy są budowane z allow-listy i ograniczane parametrami. Komentarz, nick widza ani treść eventu webhook nigdy nie są wykonywane jako polecenie konsoli Minecraft. Nie wystawiaj portu ServerTap publicznie bez ochrony.
-
-## TikTok LIVE
-
-Wybierz tryb połączenia i wpisz publiczną nazwę kanału. Biblioteka TikTokLive jest nieoficjalna i jej działanie zależy od zmian TikToka. Tryb zewnętrznego API może wymagać klucza dostawcy. Patrz [`docs/TIKTOK.md`](docs/TIKTOK.md).
-
-## Integracje z grami
-
-Formaty WebSocket, HTTP webhook, UDP oraz JSONL opisuje [`docs/BRIDGE.md`](docs/BRIDGE.md). Katalog pomysłów na gry: [`docs/GAME_IDEAS.md`](docs/GAME_IDEAS.md). Poza Minecraftem i grą demo pozostałe karty są koncepcjami, a nie gotowymi integracjami.
-
-## Zmienne środowiskowe
-
-Skopiuj `.env.example` do `.env`. `TIKTOOL_API_KEY` włącza tryb zewnętrznego API; `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` chroni zdalne webhooki. Nie commituj sekretów. Klucz ServerTap jest przechowywany w lokalnym `config.json`, pomijanym przez Git; ustaw HTTPS/VPN i zabezpiecz tę maszynę.
-
-## Architektura
-
-```text
-TikTok LIVE / symulator / webhook
-                 ↓ TikTokEvent
-         silnik reguł i presetów
-                 ↓ GameAction
- WebSocket + UDP + JSONL + ServerTap
-                 ↓
- gra demo / Minecraft / własny adapter / OBS
-```
-
-Lokalny MVP nie wymaga Supabase ani Vercel. Produkcyjne wdrożenie potrzebuje trwałego magazynu oraz działającego stale backendu Python/WebSocket; sam Vercel nie utrzyma konektora LIVE.
+- The local parkour server listens on `127.0.0.1`; never expose the RCON port to the internet.
+- GiftStream never executes chat content as a server command. Comment relaying is off by default and works only after you enable it.
+- TikTokLive is not an official API and may break; automatic reconnection does not replay events that happened while disconnected.
+- The MyInstants integration does not use an official API; the search reads the public page unofficially and depends on its availability.
+- The local build requires neither Supabase nor Vercel. TikTok LIVE details: [`docs/TIKTOK.md`](docs/TIKTOK.md).

@@ -1,21 +1,21 @@
-# GiftStream dla Windows: jedna aplikacja, samodzielne aktualizacje
+# GiftStream for Windows: one app, self-contained updates
 
-## Uruchamianie
+## Running
 
-GiftStream jest dostarczany jako jeden plik `GiftStream.exe`. Nie ma osobnego launchera ani instalatora. Po uruchomieniu aplikacja umieszcza własną kopię w `%LOCALAPPDATA%\GiftStream\versions\<wersja>`, zachowuje ustawienia w `%LOCALAPPDATA%\GiftStream` i tworzy albo odświeża skrót `GiftStream` w menu Start. W menu Start znajduje się skrót do aktualnego pliku aplikacji.
+GiftStream ships as a single `GiftStream.exe`. There is no separate launcher or installer. On start the app copies itself into `%LOCALAPPDATA%\GiftStream\versions\<version>`, keeps settings in `%LOCALAPPDATA%\GiftStream` and creates or refreshes the `GiftStream` Start-menu shortcut. The Start menu points at the current application file.
 
-Panel działa w natywnym oknie GiftStream z osadzonym Microsoft Edge WebView2. Instalacja Pythona nie jest wymagana. Jeśli WebView2 nie jest dostępny, GiftStream pokaże błąd uruchomienia; runtime można pobrać z oficjalnej strony Microsoft.
+The panel runs in a native GiftStream window with embedded Microsoft Edge WebView2. Installing Python is not required. If WebView2 is missing, GiftStream shows a startup error; the runtime can be downloaded from Microsoft's official page.
 
-## Aktualizacje
+## Updates
 
-Przy starcie i następnie co 30 minut GiftStream sprawdza najnowsze wydanie GitHub. Aktualizacja jest pobierana jako nowe `GiftStream.exe`, weryfikowana przez SHA-256 i zapisywana w katalogu wersji. Jeśli aktualizacja zostanie znaleziona podczas startu, GiftStream uruchamia ją przed pokazaniem okna. Kontrola okresowa nie przerywa transmisji: aplikacja odświeża skrót menu Start, aby kolejne uruchomienie wybrało nową wersję. Przycisk **Sprawdź aktualizacje** uruchamia kontrolę ręcznie.
+At startup and then every 30 minutes GiftStream checks the newest GitHub release. An update is downloaded as a new `GiftStream.exe`, verified with SHA-256 and stored in the version directory. If an update is found during startup, GiftStream launches it before showing the window. If the download finishes inside a running Windows app, GiftStream automatically starts the new version and closes the old one. That can briefly interrupt event reception; the TikTok stream itself keeps running, but the app may need to reconnect afterwards. The update bar also has a manual retry button, and **Check for updates** starts a check by hand.
 
-Wydanie zawiera tylko `GiftStream.exe` oraz `checksums.txt`. Workflow `.github/workflows/release-windows.yml` buduje pojedynczy plik aplikacji po utworzeniu taga w formacie `vX.Y.Z`.
+Each release contains `GiftStream.exe`, `checksums.txt`, and the `GiftStream-Browser-Relay.zip` browser relay. The workflow `.github/workflows/release-windows.yml` runs on a `vX.Y.Z` tag, verifies the tag against `app/version.py`, runs the test suite, builds the Windows app and publishes those assets. The app updater downloads and verifies `GiftStream.exe` with the matching SHA-256 entry.
 
-## Dane
+## Data
 
-Ustawienia, presety, katalog giftów i historia są przechowywane w `%LOCALAPPDATA%\GiftStream`. Użytkownik wybrał czystą instalację: nowe wydanie nie importuje danych z poprzednich instalacji.
+Settings, presets, the gift catalog and history are stored in `%LOCALAPPDATA%\GiftStream`. The clean-install policy stays in force: a new release never imports data from previous installations.
 
-## Bezpieczeństwo
+## Security
 
-Suma SHA-256 wykrywa uszkodzenie lub niepełne pobranie, ale nie zastępuje podpisu Authenticode. Plik nie jest podpisany, więc Windows SmartScreen może wyświetlić ostrzeżenie.
+The SHA-256 checksum detects corruption or an incomplete download, but it is not a replacement for an Authenticode signature. The file is not signed, so Windows SmartScreen may show a warning.

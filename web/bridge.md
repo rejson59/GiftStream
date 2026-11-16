@@ -1,10 +1,10 @@
-# GiftStream Game Bridge
+# GiftStream event bridge
 
-Every matching event becomes a `GameAction` and is broadcast to connected browser games over `/ws/game`. Actions are also sent to UDP `127.0.0.1:47821` and appended to `events.jsonl`.
+GiftStream currently ships the Minecraft Parkour 100 Levels integration. A generic local event feed is available to external tools; it does not include additional bundled games.
 
 ## WebSocket
 
-Connect to `ws://localhost:8000/ws/game` (use `wss://` on HTTPS). Incoming messages have a `kind` field (`action`, `event`, or `status`) and a `data` object.
+Connect to `ws://localhost:8000/ws/feed` (use `wss://` on HTTPS). Incoming messages include `snapshot`, `event`, `action`, and `status` kinds.
 
 ## HTTP webhook
 
@@ -14,10 +14,8 @@ curl -X POST http://localhost:8000/api/bridge/event \
   -d '{"type":"gift","user":"viewer_123","gift_name":"Rose","diamonds":1,"source":"webhook"}'
 ```
 
-If `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` is set, include `-H 'X-GiftStream-Secret: your-secret'`. Event types: `gift`, `like`, `follow`, `comment`, `join`, `share`, `subscribe`.
+If `GIFTSTREAM_BRIDGE_WEBHOOK_SECRET` is set, include `-H 'X-GiftStream-Secret: your-secret'`. Event text is treated as untrusted data; GiftStream never executes comments as Minecraft commands.
 
 ## UDP and JSONL
 
-The UDP payload is the action object, UTF-8 encoded JSON. The JSONL file has one action per line. Keep the UDP listener bound to loopback; it is intended for a local game process.
-
-Action identifiers include `spawn_zombie`, `spawn_enemy`, `spawn_boss`, `boss_raid`, `heal`, `drop_diamond`, `drop_item`, `give_item`, `move_left`, `move_right`, `jump`, `shield`, `speed_boost`, `teleport`, `spawn_wall`, `change_weather`, `change_time`, `screen_shake`, `confetti`, `vote`, and `custom`. Action parameters are an open JSON map. Implement only a safe allow-list in your game adapter; do not execute chat text as commands.
+The generic local bridge emits JSON action payloads to UDP `127.0.0.1:47821` and appends one action per line to the local JSONL file. Keep any UDP listener on loopback.

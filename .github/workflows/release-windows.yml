@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"
 
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+
 permissions:
   contents: write
 
@@ -18,14 +21,14 @@ jobs:
       - name: Sprawdź tag wydania
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
             throw "Użyj taga w formacie vX.Y.Z, np. v0.5.0"
           }
 
       - name: Sprawdź wersję aplikacji
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $version = $env:RELEASE_TAG.TrimStart('v')
           $expected = 'VERSION = "' + $version + '"'
           if (-not (Select-String -Path app/version.py -SimpleMatch -Pattern $expected)) {
             throw "Tag wydania i VERSION w app/version.py muszą być zgodne."
@@ -41,7 +44,14 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller pytest
 
       - name: Uruchom testy
-        run: python -m pytest -q
+        shell: pwsh
+        run: |
+          python -m pytest -q 2>&1 | Tee-Object -FilePath pytest.log
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (Get-Content pytest.log -Tail 60) -join "%0A"
+            Write-Host "::error file=tests/test_parkour.py::pytest failed:$tail"
+            exit 1
+          }
 
       - name: Zbuduj pojedynczą aplikację GiftStream
         shell: pwsh
@@ -52,6 +62,7 @@ jobs:
           --paths .
           --add-data "web;web"
           --add-data "docs;docs"
+          --add-data "100-levels-5229-v1.7.4.zip;."
           --collect-all webview
           --collect-all proxy_tools
           --collect-all bottle
@@ -73,6 +84,9 @@ jobs:
           Copy-Item dist/GiftStream.exe release-assets/GiftStream.exe
           $hash = (Get-FileHash release-assets/GiftStream.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  GiftStream.exe" | Set-Content -Encoding ascii release-assets/checksums.txt
+          Compress-Archive -Path browser-extension\* -DestinationPath release-assets\GiftStream-Browser-Relay.zip -Force
+          $extensionHash = (Get-FileHash release-assets/GiftStream-Browser-Relay.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$extensionHash  GiftStream-Browser-Relay.zip" | Add-Content -Encoding ascii release-assets/checksums.txt
           Get-ChildItem release-assets | Select-Object Name,Length
 
       - name: Opublikuj wydanie GitHub
@@ -80,10 +94,65 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $tag = $env:GITHUB_REF_NAME
-          gh release create $tag `
-            --repo $env:GITHUB_REPOSITORY `
-            --title "GiftStream $tag" `
-            --generate-notes `
-            release-assets/GiftStream.exe `
-            release-assets/checksums.txt
+          $tag = $env:RELEASE_TAG
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag `
+              --repo $env:GITHUB_REPOSITORY `
+              --clobber `
+              release-assets/GiftStream.exe `
+              release-assets/checksums.txt `
+              release-assets/GiftStream-Browser-Relay.zip
+          } else {
+            gh release create $tag `
+              --repo $env:GITHUB_REPOSITORY `
+              --title "GiftStream $tag" `
+              --target $env:GITHUB_SHA `
+              --generate-notes `
+              release-assets/GiftStream.exe `
+              release-assets/checksums.txt `
+              release-assets/GiftStream-Browser-Relay.zip
+          }
+
+      - name: Usuń starsze wydania i tagi (zostają dwa ostatnie)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $current = $env:RELEASE_TAG.TrimStart('v')
+          $releases = gh release list --repo $env:GITHUB_REPOSITORY --limit 200 --json tagName,isDraft |
+            ConvertFrom-Json | Where-Object { -not $_.isDraft } | ForEach-Object { $_.tagName }
+          $versions = @()
+          foreach ($tag in $releases) {
+            $clean = $tag.TrimStart('v')
+            $parsed = $null
+            if ([version]::TryParse($clean, [ref]$parsed)) {
+              $versions += [pscustomobject]@{ Tag = $tag; Version = $parsed }
+            }
+          }
+          $sorted = $versions | Sort-Object Version -Descending
+          $keep = @($sorted | Select-Object -First 2 | ForEach-Object { $_.Tag })
+          if ($keep -notcontains $env:RELEASE_TAG) { $keep += $env:RELEASE_TAG }
+          $removed = 0
+          foreach ($entry in $sorted) {
+            if ($keep -contains $entry.Tag) { continue }
+            Write-Host "Usuwam stare wydanie $($entry.Tag)"
+            gh release delete $entry.Tag --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
+            if ($LASTEXITCODE -ne 0) { Write-Host "::warning::Nie udało się usunąć wydania $($entry.Tag)" }
+            $removed++
+          }
+          # Tagi bez wydania (np. wydanie usunięte ręcznie) też muszą zniknąć.
+          $tags = git ls-remote --tags origin |
+            ForEach-Object { ($_ -split "`t")[1] -replace '^refs/tags/', '' } |
+            Where-Object { $_ -notmatch '\^{}$' }
+          $removedTags = 0
+          foreach ($tag in $tags) {
+            if ($keep -contains $tag) { continue }
+            $parsed = $null
+            if (-not [version]::TryParse($tag.TrimStart('v'), [ref]$parsed)) { continue }
+            Write-Host "Usuwam stary tag $tag"
+            git push origin --delete $tag
+            if ($LASTEXITCODE -ne 0) { Write-Host "::warning::Nie udało się usunąć tagu $tag" }
+            $removedTags++
+          }
+          Write-Host "Zostawiono: $($keep -join ', '); usunięte wydania: $removed; usunięte tagi: $removedTags"
