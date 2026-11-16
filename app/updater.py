@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
+from . import diagnostics
+
 APP_EXE = "GiftStream.exe"
 MAX_EXECUTABLE_BYTES = 400 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 4 * 1024 * 1024
@@ -118,7 +120,7 @@ def download_executable(url: str, on_progress: Callable[[int, str], None] | None
                     done += len(pieces[futures[future]] or b"")
                     percent = min(99, int(done * 100 / max(1, total)))
                 if on_progress:
-                    on_progress(percent, f"Pobieranie aktualizacji: {percent}%")
+                    on_progress(percent, f"Downloading the update: {percent}%")
     except Exception:
         # Some release hosts/proxies do not honor Range reliably. Restart as one
         # bounded streaming read rather than leave a corrupted or partial update.
@@ -185,6 +187,8 @@ def _install_executable(executable: bytes, tag: str, data_root: Path) -> Path:
 
     version_dir = data_root / "versions" / tag
     version_dir.mkdir(parents=True, exist_ok=True)
+    # Only the new build and the one before it are worth keeping on disk.
+    prune_versions(data_root, protected=(tag,))
     destination = version_dir / APP_EXE
     temporary_executable = destination.with_suffix(".exe.new")
     temporary_executable.write_bytes(executable)
@@ -205,6 +209,7 @@ def cache_running_executable(executable: Path, tag: str, data_root: Path) -> Pat
         shutil.copy2(source, temporary)
         os.replace(temporary, destination)
     _write_current(data_root, tag, destination)
+    prune_versions(data_root, protected=(tag,))
     return destination
 
 
@@ -268,4 +273,52 @@ def prepare_latest(
             return cached[0], cached[1], False, f"The update failed — starting the installed version ({exc})."
         raise UpdateError(f"Cannot download the application: {exc}") from exc
 
-    return release["tag"], installed, True, f"Pobrano GiftStream {release['tag']}."
+    return release["tag"], installed, True, f"Downloaded GiftStream {release['tag']}."
+
+
+def _version_key(tag: str) -> tuple[int, ...]:
+    numbers = re.findall(r"\d+", tag or "")
+    return tuple(int(part) for part in numbers[:3]) if numbers else ()
+
+
+def prune_versions(data_root: Path, keep_previous: int = 1,
+                   protected: tuple[str, ...] | set[str] = ()) -> list[str]:
+    """Delete old version folders, keeping the current one and one step back.
+
+    Every update used to leave its ``versions/<tag>/GiftStream.exe`` behind, so a
+    few weeks of updates could quietly fill the disk with dozens of 35 MB copies.
+    The newest installed version, the one directly below it and the running /
+    about-to-start version always stay, so a bad update can still be rolled back
+    by hand. Anything that is not a version folder is never touched.
+    """
+    versions_root = data_root / "versions"
+    if not versions_root.is_dir():
+        return []
+    candidates: list[tuple[tuple[int, ...], str, Path]] = []
+    for folder in versions_root.iterdir():
+        if not folder.is_dir() or not valid_release_tag(folder.name):
+            continue
+        candidates.append((_version_key(folder.name), folder.name, folder))
+    if not candidates:
+        return []
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+    keep: set[str] = {tag for tag in protected if tag}
+    for _key, name, _folder in candidates[: 1 + max(0, keep_previous)]:
+        keep.add(name)
+    current = current_install(data_root)
+    if current:
+        keep.add(current[0])
+    removed: list[str] = []
+    for _key, name, folder in candidates:
+        if name in keep:
+            continue
+        try:
+            shutil.rmtree(folder)
+        except OSError as exc:
+            diagnostics.warning("Could not remove the old version %s: %s", folder, exc)
+            continue
+        removed.append(name)
+    if removed:
+        diagnostics.info("Removed %d old GiftStream versions, keeping %s.", len(removed), ", ".join(sorted(keep)))
+    return removed

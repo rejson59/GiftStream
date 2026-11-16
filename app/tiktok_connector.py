@@ -100,7 +100,7 @@ class TikTokConnector:
         if mode == "managed":
             return await self._start_managed()
         self.connection_state = "error"
-        self.last_error = f"Nieznany tryb: {mode}"
+        self.last_error = f"Unknown mode: {mode}"
         diagnostics.error(self.last_error)
         return {"ok": False, "message": self.last_error}
 
@@ -170,7 +170,7 @@ class TikTokConnector:
     # ------------------------------------------------------------------
     async def _start_tiktoklive(self) -> dict:
         if not self.username:
-            return {"ok": False, "message": "Podaj @username streamera"}
+            return {"ok": False, "message": "Enter the streamer's @username"}
         try:
             from TikTokLive import TikTokLiveClient  # type: ignore
             from TikTokLive.events import (  # type: ignore
@@ -365,7 +365,7 @@ class TikTokConnector:
                             "The EulerStream signing server rejected the connection because of the "
                             "hourly connection limit (rate_limit_account_hour). Automatic attempts "
                             "were paused. Configure SIGN_API_KEY from EulerStream or try "
-                            "ponownie po odnowieniu limitu."
+                            "again once the limit resets."
                         )
                         self.connection_state = "error"
                         self.retry_in = 0.0
@@ -432,7 +432,7 @@ class TikTokConnector:
             return {"ok": False,
                     "message": "No TIKTOOL_API_KEY in .env. Set the key or connect to TikTok LIVE directly."}
         if not self.username:
-            return {"ok": False, "message": "Podaj @username streamera"}
+            return {"ok": False, "message": "Enter the streamer's @username"}
         try:
             import websockets  # type: ignore
         except ImportError as exc:

@@ -1,4 +1,4 @@
-"""GiftStream — API i serwer webowy."""
+"""GiftStream — web API and server."""
 from __future__ import annotations
 
 import asyncio
@@ -111,7 +111,7 @@ class BrowserEventRequest(BaseModel):
 
 async def publish_game_action(action: GameAction) -> None:
     trigger = action.triggered_by
-    trigger_hint = f" po zdarzeniu {trigger.type}" if trigger else ""
+    trigger_hint = f" for the {trigger.type} event" if trigger else ""
     diagnostics.info("Matched rule '%s': action '%s'%s.",
                      action.rule_name or "unnamed", action.action, trigger_hint)
     action_id = await hub.publish_action(action)
@@ -249,7 +249,7 @@ async def process_event(ev: TikTokEvent, *, trigger_actions: bool = True) -> Non
         _event_diag_times[event_key] = now
         if len(_event_diag_times) > 1000:
             _event_diag_times.pop(next(iter(_event_diag_times)))
-        diagnostics.info("Odebrano zdarzenie: source=%s type=%s%s%s.",
+        diagnostics.info("Received an event: source=%s type=%s%s%s.",
                          ev.source[:40], ev.type,
                          f" gift={gift_label!r}" if gift_label else "",
                          f" count={ev.repeat_count}" if ev.type == "gift" else "")
@@ -941,7 +941,7 @@ async def update_config(data: dict[str, Any]) -> dict:
     except ValidationError as exc:
         raise HTTPException(422, detail=jsonable_encoder(exc.errors())) from exc
     save_config()
-    diagnostics.info("Zaktualizowano ustawienia panelu GiftStream.")
+    diagnostics.info("GiftStream panel settings updated.")
     return public_config()
 
 @app.get("/api/gifts")
@@ -1026,7 +1026,7 @@ async def parkour_stop() -> dict[str, Any]:
 async def parkour_enabled(request: dict[str, bool]) -> dict[str, Any]:
     state = parkour_server.settings()
     if not state.get("server_dir"):
-        raise HTTPException(400, "Najpierw skonfiguruj lokalny serwer parkour.")
+        raise HTTPException(400, "Create the local Parkour server first.")
     state["enabled"] = bool(request.get("enabled", False))
     await asyncio.to_thread(parkour_server.save_settings, state)
     diagnostics.info("Sterowanie zdarzeniami w lokalnym Parkour %s.", "enabled" if state["enabled"] else "disabled")
@@ -1038,7 +1038,7 @@ async def parkour_enabled(request: dict[str, bool]) -> dict[str, Any]:
 async def parkour_chat_relay(req: ParkourChatRelayRequest) -> dict[str, Any]:
     state = parkour_server.settings()
     if not state.get("server_dir"):
-        raise HTTPException(400, "Najpierw skonfiguruj lokalny serwer parkour.")
+        raise HTTPException(400, "Create the local Parkour server first.")
     state["chat_relay_enabled"] = req.enabled
     await asyncio.to_thread(parkour_server.save_settings, state)
     diagnostics.info("Przekazywanie komentarzy LIVE do Minecraft %s.", "enabled" if req.enabled else "disabled")
@@ -1053,7 +1053,7 @@ async def parkour_test_action(req: ParkourActionRequest) -> dict[str, Any]:
     if req.action not in KNOWN_ACTIONS or not req.action.startswith(prefix):
         raise HTTPException(400, f"This action does not match the active mode {mode}.")
     if not state.get("server_dir"):
-        raise HTTPException(409, "Najpierw skonfiguruj lokalny serwer Minecraft.")
+        raise HTTPException(409, "Create the local Minecraft server first.")
     status = await asyncio.to_thread(parkour_server.status)
     if not status.get("ready"):
         raise HTTPException(409, status.get("message") or "The Minecraft server is not ready over RCON yet.")
@@ -1176,7 +1176,7 @@ async def report_client_diagnostic(req: ClientDiagnosticRequest) -> dict[str, bo
 async def clear_diagnostics() -> dict[str, bool]:
     diagnostics.clear_logs()
     await asyncio.to_thread(parkour_server.clear_diagnostic_logs)
-    diagnostics.info("Dziennik aplikacji i log Minecraft wyczyszczono z panelu GiftStream.")
+    diagnostics.info("Application and Minecraft logs were cleared from the GiftStream panel.")
     return {"ok": True}
 
 @app.post("/api/connect")

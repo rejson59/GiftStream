@@ -923,8 +923,8 @@ class ParkourServer:
         try:
             if game_mode == "parkour":
                 _map_archive()  # Fail before downloading server files if the bundled world is absent.
-            phase = "pobieranie serwera i przygotowanie Java"
-            diagnostics.info("Pobieram oficjalny serwer Minecraft %s i sprawdzam wymagania Java.", selected_version)
+            phase = "downloading the server and preparing Java"
+            diagnostics.info("Downloading the official Minecraft server %s and checking the Java requirements.", selected_version)
             jar, required_java, installed_version, java_executable = _download_server_jar(root, selected_version)
             diagnostics.info("Server downloaded and verified; using Java %s (%s).", required_java, java_executable)
             if game_mode == "parkour":
@@ -939,7 +939,7 @@ class ParkourServer:
                 diagnostics.info("The 100 Levels map is unpacked and installed as %s/world.", root)
             else:
                 diagnostics.info("The Dropper Arena will be generated in a vanilla world through controlled RCON commands after start.")
-            phase = "zapisywanie konfiguracji serwera"
+            phase = "saving the server configuration"
             (root / "eula.txt").write_text("# Accepted in GiftStream setup\neula=true\n", encoding="ascii")
             _write_server_properties(root / "server.properties", password)
             state = {"server_dir": str(root), "player": player,
@@ -1213,7 +1213,7 @@ class ParkourServer:
             response.update({"running": True, "ready": True,
                              "players_online": int(player_match.group(1)) if player_match else len(players),
                              "players": players,
-                             "message": "Minecraft gotowy · " + (listing or "RCON connected")})
+                             "message": "Minecraft is ready · " + (listing or "RCON connected")})
             if (state.get("game_mode") == "dropper"
                     and any(name.casefold() == str(state.get("player", "")).casefold() for name in players)):
                 player = str(state.get("player", ""))

@@ -52,7 +52,9 @@ def test_diagnostics_endpoints_return_and_clear_copyable_logs(monkeypatch):
 def test_dashboard_has_shared_diagnostics_panel_and_no_orphaned_bridge_payload():
     response = TestClient(main.app).get("/")
     assert response.status_code == 200
-    assert "Logi aplikacji i Minecraft" in response.text
+    # The panel is English in the source; Polish comes from the i18n catalog.
+    assert "Application and Minecraft logs" in response.text
+    assert "Logi aplikacji i Minecraft" not in response.text
     assert "Nieobsłużony wyjątek HTTP" not in response.text
     assert '<span>"action"</span>' not in response.text
 

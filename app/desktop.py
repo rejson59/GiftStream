@@ -21,7 +21,7 @@ from app import update_state
 from app.main import app
 from app.paths import data_dir, installed_release_tag
 from app.shortcuts import create_start_menu_shortcut
-from app.updater import current_install, prepare_latest
+from app.updater import current_install, prepare_latest, prune_versions
 from app.version import RELEASE_TAG
 
 GITHUB_REPOSITORY = os.environ.get("GIFTSTREAM_GITHUB_REPOSITORY", "rejson59/GiftStream")
@@ -223,6 +223,12 @@ class GiftStreamDesktop:
 
     def run(self) -> None:
         data_dir()
+        # Keep the disk tidy: this build plus the previous one is all we need.
+        threading.Thread(
+            target=lambda: prune_versions(data_dir(), protected=(self.current_tag, RELEASE_TAG)),
+            name="GiftStream version cleanup",
+            daemon=True,
+        ).start()
         if not self._wait_for_server():
             raise RuntimeError("Could not start the local GiftStream server.")
 

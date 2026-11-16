@@ -702,13 +702,13 @@ def test_status_reports_rcon_failure_and_preserves_retry_reason(monkeypatch, tmp
     calls = []
     def fail_rcon(command, **_kwargs):
         calls.append(command)
-        raise PermissionError("Serwer odrzucił hasło RCON.")
+        raise PermissionError("The server rejected the RCON password.")
     monkeypatch.setattr(server, "_rcon", fail_rcon)
     first = server.status()
     second = server.status()
     assert first["running"] and not first["ready"]
     assert "RCON does not answer" in first["message"]
-    assert "odrzucił hasło" in second["message"]
+    assert "rejected the RCON password" in second["message"]
     assert calls == ["list"]
 
 
