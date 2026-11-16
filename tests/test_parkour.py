@@ -409,19 +409,19 @@ def test_parkour_jail_builds_a_floating_cage_without_touching_the_map(monkeypatc
     monkeypatch.setattr(server, "player_position", lambda _player: (-4.5, 90.0, 2.5))
     assert server.execute_action("parkour_jail") == \
         "Player is locked in a flying glass cage for 10 seconds."
-    # Floor 2 blocks above the ground the player stands on, roof 3 blocks higher.
-    assert commands[0] == "fill -6 92 1 -4 92 3 minecraft:glass keep"
-    assert commands[1] == "fill -6 95 1 -4 95 3 minecraft:glass keep"
-    # Every wall is placed with `keep`: the cage can only fill air, so no map block
-    # can be replaced or destroyed — not even a wall sitting on the cage edge.
+    # The jail is in the clear air above the course and below its y=255 ceiling.
+    # The player stands on top of the floor block (y=200), not inside it.
+    assert commands[0] == "fill -6 200 1 -4 200 3 minecraft:glass keep"
+    assert commands[1] == "fill -6 203 1 -4 203 3 minecraft:glass keep"
+    # Every wall is placed with `keep`: no map block can be replaced/destroyed.
     walls = commands[2:6]
     assert walls == [
-        "fill -6 93 1 -4 94 1 minecraft:iron_bars keep",
-        "fill -6 93 3 -4 94 3 minecraft:iron_bars keep",
-        "fill -6 93 1 -6 94 3 minecraft:iron_bars keep",
-        "fill -4 93 1 -4 94 3 minecraft:iron_bars keep",
+        "fill -6 201 1 -4 202 1 minecraft:iron_bars keep",
+        "fill -6 201 3 -4 202 3 minecraft:iron_bars keep",
+        "fill -6 201 1 -6 202 3 minecraft:iron_bars keep",
+        "fill -4 201 1 -4 202 3 minecraft:iron_bars keep",
     ]
-    assert commands[6] == "tp Streamer -4.5 92.1 2.5"
+    assert commands[6] == "tp Streamer -4.5 201.1 2.5"
     assert commands[7] == "effect give Streamer minecraft:resistance 12 4 true"
     assert commands[8] == "effect give Streamer minecraft:slow_falling 12 0 true"
     assert json.loads(commands[9].split("actionbar ", 1)[1])["text"] == "JAILED · 10 s"
@@ -456,7 +456,8 @@ def test_repeated_jail_refreshes_the_existing_cage_without_overwriting_its_retur
     assert server.execute_action("parkour_jail", "Streamer", {"seconds": 7}) == \
         "Player is locked in a flying glass cage for 7 seconds."
     assert server._cages["Streamer"] == original_cage
-    assert len(commands) == 3
+    assert commands[0] == "tp Streamer -4.5 201.1 2.5"
+    assert len(commands) == 4
     assert not any(command.startswith("fill ") for command in commands)
 
 
@@ -477,8 +478,8 @@ def test_jail_release_clears_only_the_cage_material_and_drops_the_player_back(mo
     commands.clear()
     server.release_jail("Streamer")
     # `replace` with the cage materials only: a map block can never be removed.
-    assert commands[0] == "fill -6 92 1 -4 95 3 minecraft:air replace minecraft:iron_bars"
-    assert commands[1] == "fill -6 92 1 -4 95 3 minecraft:air replace minecraft:glass"
+    assert commands[0] == "fill -6 200 1 -4 203 3 minecraft:air replace minecraft:iron_bars"
+    assert commands[1] == "fill -6 200 1 -4 203 3 minecraft:air replace minecraft:glass"
     assert commands[2] == "tp Streamer -4.50 90.20 2.50"
     assert any("FREE!" in command for command in commands)
 
